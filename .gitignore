@@ -1,0 +1,43 @@
+# Config - Sensitive or generated
+config/**/*
+!config/README.md   # Keep documentation files if needed
+
+# Ansible artifacts
+*.retry
+*.log
+*.bak
+*.facts
+*.tar
+*.tmp
+
+# Ansible cache and facts
+.ansible/
+ansible/.ansible/
+ansible/facts/
+ansible/.retry
+ansible/tmp/
+ansible/__pycache__/
+
+# Vim / Editor temporary files
+*.swp
+*.swo
+*.swn
+*.un~
+*.tmp
+*~
+
+# Python bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Docker build cache (if any)
+docker-data/
+.docker/
+*.img
+
+# Shell and terminal history
+.history
+.zcompdump*
+.zsh_history
+.zsh_sessions
