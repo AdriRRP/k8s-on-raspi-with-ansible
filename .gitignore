@@ -1,8 +1,12 @@
+# ===========================
 # Config - Sensitive or generated
+# ===========================
 config/**/*
 !config/README.md   # Keep documentation files if needed
 
+# ===========================
 # Ansible artifacts
+# ===========================
 *.retry
 *.log
 *.bak
@@ -18,7 +22,9 @@ ansible/.retry
 ansible/tmp/
 ansible/__pycache__/
 
+# ===========================
 # Vim / Editor temporary files
+# ===========================
 *.swp
 *.swo
 *.swn
@@ -26,18 +32,42 @@ ansible/__pycache__/
 *.tmp
 *~
 
+# ===========================
 # Python bytecode and cache
+# ===========================
 __pycache__/
 *.pyc
 *.pyo
 
-# Docker build cache (if any)
+# ===========================
+# Docker artifacts (optional cache, images)
+# ===========================
 docker-data/
 .docker/
 *.img
 
+# ===========================
 # Shell and terminal history
+# ===========================
 .history
 .zcompdump*
 .zsh_history
 .zsh_sessions
+
+# ===========================
+# macOS system files
+# ===========================
+.DS_Store
+
+# ===========================
+# Windows system files
+# ===========================
+Thumbs.db
+desktop.ini
+
+# ===========================
+# IDE/editor metadata
+# ===========================
+.vscode/
+.idea/
+*.code-workspace
