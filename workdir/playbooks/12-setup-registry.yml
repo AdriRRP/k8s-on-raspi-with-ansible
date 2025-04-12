@@ -1,0 +1,6 @@
+- name: Deploy internal private Docker registry
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - registry

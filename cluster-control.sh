@@ -75,6 +75,10 @@ while [[ "$#" -gt 0 ]]; do
       DOCKER_CMD="ansible-playbook -i inventory/hosts.ini playbooks/10-setup-metallb.yml"
       shift
       ;;
+    --registry)
+      DOCKER_CMD="ansible-playbook -i inventory/hosts.ini playbooks/12-setup-registry.yml"
+      shift
+      ;;
     --shutdown)
       DOCKER_CMD="ansible-playbook -i inventory/hosts.ini playbooks/00-shutdown-nodes.yml"
       shift

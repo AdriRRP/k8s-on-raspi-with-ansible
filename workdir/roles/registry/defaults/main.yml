@@ -1,0 +1,10 @@
+registry_namespace: kube-system
+registry_name: registry
+registry_port: 5000
+registry_pvc_enabled: false
+
+# Optional for LoadBalancer exposure via MetalLB
+registry_expose_lb: true
+registry_lb_ip: 192.168.0.250
+
+kubeconfig_local_path: /home/ansible/.kube/config

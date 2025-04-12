@@ -343,3 +343,68 @@ metallb_address_pool:
 
 Ensure that the selected IP range is not used by your router's DHCP pool and is routable within your LAN.
 
+---
+
+## Internal Container Registry (in Kubernetes)
+
+This project includes a self-hosted container image registry that runs inside the Kubernetes cluster and is accessible both internally and (optionally) externally via MetalLB.
+
+### Step 1: Deploy the Registry
+
+Run:
+
+```bash
+./cluster-control.sh --registry
+```
+
+This will:
+
+- Create a Deployment in the `kube-system` namespace using the official `registry:2` image
+- Expose it as a `ClusterIP` or `LoadBalancer` service (depending on configuration)
+- Optionally assign a static IP via MetalLB (e.g. `192.168.0.250`)
+- Perform a test from within the cluster using a BusyBox pod to ensure internal reachability
+- Perform a test from the control host using `curl` to ensure external access (if MetalLB is enabled)
+
+### Accessing the Registry
+
+#### From within the cluster
+Use the internal DNS name:
+```
+http://registry.kube-system.svc.cluster.local:5000
+```
+
+#### From your LAN (via MetalLB)
+If `registry_expose_lb: true` and `registry_lb_ip` are defined:
+```
+http://192.168.0.250:5000
+```
+Test externally with:
+```bash
+curl http://192.168.0.250:5000/v2/
+```
+Expected output:
+```
+{}
+```
+
+### Customization
+
+You can configure the registry settings in:
+```yaml
+roles/registry/defaults/main.yml
+```
+Example:
+```yaml
+registry_port: 5000
+registry_namespace: kube-system
+registry_expose_lb: true
+registry_lb_ip: 192.168.0.250
+```
+
+If you want persistence, modify the Deployment to use a PersistentVolumeClaim instead of `emptyDir`.
+
+### Security Note
+- By default, this registry is deployed **without authentication or TLS**.
+- It is intended for internal development use only.
+- If you plan to expose it beyond your LAN, secure it with a reverse proxy or use TLS + basic auth.
+

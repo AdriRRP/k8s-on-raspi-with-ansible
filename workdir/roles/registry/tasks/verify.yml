@@ -1,0 +1,74 @@
+- name: Wait for registry pod to be Running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ registry_namespace }}"
+    label_selectors:
+      - "app={{ registry_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: registry_pods
+  until: >
+    registry_pods.resources | length > 0 and
+    (registry_pods.resources | map(attribute='status.phase') | list | unique) == ['Running']
+  retries: 10
+  delay: 6
+  delegate_to: localhost
+
+- name: Ensure previous test pod is deleted
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    name: registry-tester
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  ignore_errors: true
+  delegate_to: localhost
+
+- name: Deploy busybox pod to test access to registry
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: registry-tester
+        namespace: default
+      spec:
+        containers:
+          - name: test
+            image: busybox
+            command: ["sh", "-c", "tail -f /dev/null"]
+        restartPolicy: Never
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for test pod to be running or succeeded
+  shell: |
+    kubectl get pod registry-tester -n default --kubeconfig={{ kubeconfig_local_path }} -o jsonpath='{.status.phase}'
+  register: pod_phase
+  until: pod_phase.stdout in ["Running", "Succeeded"]
+  retries: 10
+  delay: 5
+  changed_when: false
+  delegate_to: localhost
+
+- name: Test access to registry from pod
+  shell: |
+    kubectl exec -n default registry-tester --kubeconfig={{ kubeconfig_local_path }} -- \
+    wget -qO- http://{{ registry_name }}.{{ registry_namespace }}.svc.cluster.local:{{ registry_port }}/v2/
+  register: wget_test
+  changed_when: false
+  failed_when: "'{}' not in wget_test.stdout"
+  delegate_to: localhost
+
+- name: Show registry test result
+  debug:
+    msg: "Internal registry reachable from inside cluster: {{ wget_test.stdout }}"
+
+- name: Delete test pod
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    name: registry-tester
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost

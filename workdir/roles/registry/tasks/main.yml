@@ -1,0 +1,3 @@
+- import_tasks: deploy.yml
+- import_tasks: verify.yml
+- import_tasks: external-verify.yml

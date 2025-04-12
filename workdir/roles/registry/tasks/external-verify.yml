@@ -1,0 +1,30 @@
+- name: Check if external IP is configured
+  assert:
+    that:
+      - registry_expose_lb
+      - registry_lb_ip is defined
+    fail_msg: >
+      External registry verification skipped: either MetalLB is disabled
+      or no loadBalancer IP is defined.
+    success_msg: "MetalLB external IP correctly configured: {{ registry_lb_ip }}"
+
+- name: Wait for registry to be reachable at {{ registry_lb_ip }}
+  uri:
+    url: "http://{{ registry_lb_ip }}:{{ registry_port }}/v2/"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: external_response
+  retries: 10
+  delay: 5
+  until: external_response.status == 200
+  delegate_to: localhost
+
+- name: Verify response from external registry
+  fail:
+    msg: "Unexpected response from external registry at {{ registry_lb_ip }}"
+  when: "'{}' not in external_response.content"
+
+- name: Debug external registry test
+  debug:
+    msg: "Registry reachable from control host at http://{{ registry_lb_ip }}:{{ registry_port }}/v2/"

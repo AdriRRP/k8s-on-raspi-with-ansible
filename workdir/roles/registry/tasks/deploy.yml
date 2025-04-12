@@ -1,0 +1,64 @@
+- name: Create namespace for registry (if needed)
+  kubernetes.core.k8s:
+    state: present
+    kind: Namespace
+    name: "{{ registry_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Deploy registry Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "{{ registry_name }}"
+        namespace: "{{ registry_namespace }}"
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: "{{ registry_name }}"
+        template:
+          metadata:
+            labels:
+              app: "{{ registry_name }}"
+          spec:
+            containers:
+              - name: registry
+                image: registry:2
+                ports:
+                  - containerPort: 5000
+                volumeMounts:
+                  - name: registry-storage
+                    mountPath: /var/lib/registry
+            volumes:
+              - name: registry-storage
+                emptyDir: {}  # O usar un PVC si quieres persistencia
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create registry service (ClusterIP or LoadBalancer)
+  kubernetes.core.k8s:
+    state: present
+    definition: >-
+      {{
+        {
+          'apiVersion': 'v1',
+          'kind': 'Service',
+          'metadata': {
+            'name': registry_name,
+            'namespace': registry_namespace
+          },
+          'spec': {
+            'type': 'LoadBalancer' if registry_expose_lb else 'ClusterIP',
+            'selector': { 'app': registry_name },
+            'ports': [ { 'port': registry_port, 'targetPort': 5000 } ]
+          } | combine(
+            { 'loadBalancerIP': registry_lb_ip } if registry_expose_lb else {}
+          )
+        }
+      }}
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
