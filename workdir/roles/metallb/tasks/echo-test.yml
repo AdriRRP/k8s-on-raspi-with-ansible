@@ -1,0 +1,95 @@
+- name: Deploy echo-server pod
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: echo-server
+        namespace: default
+        labels:
+          app: echo-server
+      spec:
+        containers:
+          - name: echo
+            image: ealen/echo-server
+            ports:
+              - containerPort: 80
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for echo-server pod to be Running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: default
+    name: echo-server
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: echo_pod
+  until: echo_pod.resources | length > 0 and echo_pod.resources[0].status.phase == "Running"
+  retries: 10
+  delay: 6
+  delegate_to: localhost
+
+- name: Create LoadBalancer service for echo-server
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: echo-service
+        namespace: default
+      spec:
+        type: LoadBalancer
+        selector:
+          app: echo-server
+        ports:
+          - port: 80
+            targetPort: 80
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for external IP to be assigned
+  shell: |
+    kubectl --kubeconfig={{ kubeconfig_local_path }} get svc echo-service -n default \
+      -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+  register: echo_service_ip
+  retries: 10
+  delay: 5
+  until: echo_service_ip.stdout != ""
+  changed_when: false
+  delegate_to: localhost
+
+- name: Wait until echo-service is reachable via MetalLB IP
+  uri:
+    url: "http://{{ echo_service_ip.stdout }}"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: echo_response
+  retries: 10
+  delay: 5
+  until: echo_response.status == 200
+  delegate_to: localhost
+
+- name: Debug echo response
+  debug:
+    msg: "MetalLB test successful: echo service responded from {{ echo_service_ip.stdout }}"
+
+- name: Clean up test pod
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    name: echo-server
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Clean up test service
+  kubernetes.core.k8s:
+    state: absent
+    kind: Service
+    name: echo-service
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost

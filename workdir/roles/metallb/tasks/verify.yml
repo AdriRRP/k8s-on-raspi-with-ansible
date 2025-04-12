@@ -1,0 +1,29 @@
+- name: Wait for MetalLB controller pod to be running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ metallb_namespace }}"
+    label_selectors:
+      - "component=controller"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: controller_pods
+  until:
+    - controller_pods.resources | length > 0
+    - controller_pods.resources[0].status.phase == "Running"
+  retries: 10
+  delay: 6
+  delegate_to: localhost
+
+- name: Wait for MetalLB speaker pods to be running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ metallb_namespace }}"
+    label_selectors:
+      - "component=speaker"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: speaker_pods
+  until: >
+    speaker_pods.resources | length > 0 and
+    (speaker_pods.resources | map(attribute='status.phase') | list | unique) == ['Running']
+  retries: 10
+  delay: 6
+  delegate_to: localhost

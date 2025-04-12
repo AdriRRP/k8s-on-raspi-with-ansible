@@ -1,0 +1,4 @@
+- import_tasks: install.yml
+- import_tasks: verify.yml
+- import_tasks: config.yml
+- import_tasks: echo-test.yml

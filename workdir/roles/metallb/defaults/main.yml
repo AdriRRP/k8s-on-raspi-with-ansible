@@ -1,0 +1,9 @@
+kubeconfig_local_path: /home/ansible/.kube/config
+metallb_namespace: metallb-system
+metallb_version: "v0.14.9"
+metallb_manifest_url: "https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml"
+
+metallb_address_pool:
+  name: default
+  addresses:
+    - 192.168.0.240-192.168.0.250

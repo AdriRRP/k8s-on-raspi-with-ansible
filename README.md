@@ -300,3 +300,46 @@ You can also run this verification step again anytime:
 
 This ensures the entire storage pipeline — from NFS server to automatic PVCs — is functioning end-to-end.
 
+---
+
+## Load Balancer Support with MetalLB
+
+To enable support for external `LoadBalancer` services within your on-premise Raspberry Pi Kubernetes cluster, this project includes a declarative setup for [MetalLB](https://metallb.universe.tf/).
+
+### Step 1: Deploy MetalLB
+
+MetalLB will be installed in native mode with custom IP address pool and L2 advertisement. Simply run:
+
+```bash
+./cluster-control.sh --metallb
+```
+
+This will:
+
+- Apply the official MetalLB manifests
+- Wait for all MetalLB pods to become ready (`controller`, `speaker`, `webhook`)
+- Create an `IPAddressPool` with your configured address range (default: `192.168.0.240-192.168.0.250`)
+- Create a `L2Advertisement` to announce services at L2 level (ARP)
+- Verify MetalLB is operating correctly with a full echo-service test:
+  - A Pod running [`ealen/echo-server`](https://hub.docker.com/r/ealen/echo-server) is deployed
+  - A LoadBalancer service is exposed using MetalLB
+  - The host attempts a direct HTTP request to the external IP
+  - The response is validated and all resources are cleaned up
+
+### Customization
+
+You can change the IP range or namespace by editing:
+```yaml
+roles/metallb/defaults/main.yml
+```
+
+Example:
+```yaml
+metallb_address_pool:
+  name: default
+  addresses:
+    - 192.168.0.240-192.168.0.250
+```
+
+Ensure that the selected IP range is not used by your router's DHCP pool and is routable within your LAN.
+

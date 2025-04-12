@@ -1,0 +1,13 @@
+- name: Create namespace for MetalLB
+  kubernetes.core.k8s:
+    state: present
+    kind: Namespace
+    name: "{{ metallb_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Apply MetalLB manifest
+  ansible.builtin.command: >
+    kubectl apply -f {{ metallb_manifest_url }} --kubeconfig={{ kubeconfig_local_path }}
+  changed_when: false
+  delegate_to: localhost
