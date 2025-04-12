@@ -1,0 +1,3 @@
+- import_tasks: generate.yml
+- import_tasks: exchange.yml
+- import_tasks: verify.yml

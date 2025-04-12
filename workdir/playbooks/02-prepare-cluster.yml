@@ -1,0 +1,14 @@
+---
+- name: Prepare Raspberry Pi nodes for Kubernetes cluster
+  hosts: all
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: common                   # Re-update system, tools
+    - role: user-management
+      tasks_from: remove.yml         # Remove ubuntu user
+    - role: hostname                 # Set hostname from inventory_hostname
+    - role: hostsfile                # Add other cluster nodes to /etc/hosts
+    - role: ssh-setup                # Generate SSH key, share, and check
+    - role: k8s-prereq               # Check k8s pre-requisites

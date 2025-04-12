@@ -1,0 +1,35 @@
+---
+
+- name: Install NFS server
+  apt:
+    name: nfs-kernel-server
+    state: present
+    update_cache: true
+  become: true
+
+- name: Export NFS directory
+  lineinfile:
+    path: /etc/exports
+    line: "{{ nfs_export_mount }} {{ nfs_clients_subnet }}(rw,sync,no_subtree_check)"
+    state: present
+    create: yes
+  become: true
+
+- name: Reload NFS exports
+  command: exportfs -ra
+  become: true
+
+- name: Enable and start NFS service
+  systemd:
+    name: nfs-server
+    enabled: true
+    state: started
+  become: true
+
+- name: Set permissions and ownership for NFS export
+  file:
+    path: "{{ nfs_export_mount }}"
+    owner: "{{ nfs_export_owner }}"
+    group: "{{ nfs_export_group }}"
+    mode: "{{ nfs_export_mode }}"
+  become: true

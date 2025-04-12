@@ -1,0 +1,21 @@
+- name: Check if SSH key already exists
+  stat:
+    path: "/home/{{ ansible_user }}/.ssh/id_ed25519"
+  register: ssh_key
+  become: true
+
+- name: Remove existing SSH keypair if not owned by {{ ansible_user }}
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/home/{{ ansible_user }}/.ssh/id_ed25519"
+    - "/home/{{ ansible_user }}/.ssh/id_ed25519.pub"
+  when: ssh_key.stat.exists and ssh_key.stat.pw_name != ansible_user
+  become: true
+
+- name: Generate SSH keypair as {{ ansible_user }}
+  command: ssh-keygen -t ed25519 -f /home/{{ ansible_user }}/.ssh/id_ed25519 -q -N ""
+  when: not ssh_key.stat.exists or ssh_key.stat.pw_name != ansible_user
+  become: true
+  become_user: "{{ ansible_user }}"

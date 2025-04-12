@@ -1,0 +1,7 @@
+---
+- name: Deploy NFS Subdir External Provisioner
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - role: nfs-provisioner

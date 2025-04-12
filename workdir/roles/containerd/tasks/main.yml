@@ -1,0 +1,126 @@
+- name: Detect target architecture and normalize
+  set_fact:
+    arch: >-
+      {{ 'arm64' if ansible_architecture in ['aarch64', 'armv8l'] else
+         'amd64' if ansible_architecture in ['x86_64'] else
+         ansible_architecture }}
+
+- name: Set derived download URLs based on architecture
+  set_fact:
+    containerd_url: "{{ containerd_base_url }}/containerd-{{ containerd_version }}-linux-{{ arch }}.tar.gz"
+    runc_url: "{{ runc_url_base }}/runc.{{ arch }}"
+    cni_plugins_url: "{{ cni_plugins_url_base }}/cni-plugins-linux-{{ arch }}-v{{ cni_plugins_version }}.tgz"
+
+- name: Create required directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/cni/bin
+    - /usr/local/bin
+    - /usr/local/sbin
+    - /etc/containerd
+  become: true
+
+- name: Download containerd archive
+  get_url:
+    url: "{{ containerd_url }}"
+    dest: "/tmp/containerd.tar.gz"
+    mode: '0644'
+  become: true
+
+- name: Extract containerd binaries
+  unarchive:
+    src: "/tmp/containerd.tar.gz"
+    dest: "/usr/local"
+    remote_src: true
+  become: true
+
+- name: Download runc binary
+  get_url:
+    url: "{{ runc_url }}"
+    dest: "/usr/local/sbin/runc"
+    mode: '0755'
+  become: true
+
+- name: Download CNI plugins
+  get_url:
+    url: "{{ cni_plugins_url }}"
+    dest: "/tmp/cni-plugins.tgz"
+    mode: '0644'
+  become: true
+
+- name: Extract CNI plugins
+  unarchive:
+    src: "/tmp/cni-plugins.tgz"
+    dest: /opt/cni/bin
+    remote_src: true
+  become: true
+
+- name: Download containerd.service file
+  get_url:
+    url: "{{ containerd_service_url }}"
+    dest: "/usr/lib/systemd/system/containerd.service"
+    mode: '0644'
+  become: true
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: true
+  become: true
+
+- name: Enable and start containerd
+  systemd:
+    name: containerd
+    enabled: true
+    state: started
+  become: true
+
+- name: Generate default containerd config
+  shell: containerd config default > /etc/containerd/config.toml
+  args:
+    creates: /etc/containerd/config.toml
+  environment:
+    PATH: "/usr/local/bin:/usr/local/sbin:{{ ansible_env.PATH }}"
+  become: true
+
+- name: Set SystemdCgroup = true in config.toml
+  replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup\s*=\s*false'
+    replace: 'SystemdCgroup = true'
+  become: true
+
+- name: Set sandbox (pause) image
+  lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '^(\s*)sandbox_image\s*='
+    line: '\1sandbox_image = "{{ pause_image }}"'
+    insertafter: '^\[plugins."io.containerd.grpc.v1.cri"\]'
+    backrefs: true
+  become: true
+
+- name: Check if disabled_plugins is present in config.toml
+  slurp:
+    src: /etc/containerd/config.toml
+  register: config_toml_raw
+  become: true
+
+- name: Set fact if disabled_plugins line is present
+  set_fact:
+    has_disabled_plugins: "{{ (config_toml_raw.content | b64decode).splitlines() | select('match', '^\\s*disabled_plugins\\s*=') | list | length > 0 }}"
+
+- name: Ensure CRI plugin is enabled
+  replace:
+    path: /etc/containerd/config.toml
+    regexp: 'disabled_plugins\s*=.+cri.*'
+    replace: '# disabled_plugins = []'
+  when: has_disabled_plugins
+  become: true
+
+- name: Restart containerd to apply config changes
+  systemd:
+    name: containerd
+    state: restarted
+  become: true

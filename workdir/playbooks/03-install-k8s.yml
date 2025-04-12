@@ -1,0 +1,9 @@
+---
+- name: Install container runtime and Kubernetes components
+  hosts: all
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: containerd
+    - role: k8s-install

@@ -1,0 +1,6 @@
+#- name: Basic Kubernetes health check
+#  import_tasks: basic-check.yml
+#- name: Inter-node network connectivity test
+#  import_tasks: network-check.yml
+- name: CoreDNS service test
+  import_tasks: coredns.yml

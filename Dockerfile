@@ -63,12 +63,12 @@ ENV LANG=en_US.UTF-8 \
 
 # ---- SHELL & DEVELOPMENT TOOLS ----
 RUN apt-get update && apt-get install -y \
-    zsh vim tree fzf htop jq yq fonts-powerline \
+    zsh vim tree fzf htop jq yq fonts-powerline python3-kubernetes \
     && rm -rf /var/lib/apt/lists/*
 
 # ---- INSTALL OH-MY-ZSH AND CONFIGURE THEME/PLUGINS ----
 USER ansible
-WORKDIR /home/ansible
+WORKDIR /home/ansible/workdir
 RUN RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
     sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" && \
     sed -i 's/^ZSH_THEME=.*/ZSH_THEME="agnoster"/' ~/.zshrc && \

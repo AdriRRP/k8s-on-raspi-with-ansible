@@ -1,0 +1,22 @@
+---
+- name: Install base system tools
+  ansible.builtin.apt:
+    name:
+      - curl
+      - git
+      - vim
+      - tmux
+      - htop
+      - net-tools
+      - python3-pip
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+      - ca-certificates
+      - software-properties-common
+      - tree
+      - nfs-common
+      - bat
+      - bat
+    state: present
+  tags: tools

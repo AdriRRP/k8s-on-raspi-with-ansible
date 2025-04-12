@@ -1,0 +1,87 @@
+---
+- name: Create PVC for test
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: test-pvc
+        namespace: default
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Mi
+        storageClassName: "{{ storage_class_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create test Pod using PVC
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: pvc-tester
+        namespace: default
+      spec:
+        containers:
+          - name: test
+            image: busybox
+            command: ['sh', '-c', 'echo SUCCESS > /data/test.txt && sleep 60']
+            volumeMounts:
+              - mountPath: /data
+                name: test-volume
+        volumes:
+          - name: test-volume
+            persistentVolumeClaim:
+              claimName: test-pvc
+        restartPolicy: Never
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for test pod to be running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: default
+    name: pvc-tester
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: pod_info
+  retries: 10
+  delay: 6
+  until: pod_info.resources | length > 0 and pod_info.resources[0].status.phase == "Running"
+  delegate_to: localhost
+
+- name: Check contents of test file from pod
+  command: >
+    kubectl --kubeconfig={{ kubeconfig_local_path }} exec -n default pvc-tester -- cat /data/test.txt
+  register: test_output
+  delegate_to: localhost
+  changed_when: false
+  failed_when: "'SUCCESS' not in test_output.stdout"
+
+- name: Show test output
+  debug:
+    var: test_output.stdout
+  delegate_to: localhost
+
+- name: Clean up test pod
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    name: pvc-tester
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Clean up test pvc
+  kubernetes.core.k8s:
+    state: absent
+    kind: PersistentVolumeClaim
+    name: test-pvc
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost

@@ -1,100 +1,302 @@
-# ⚙️ Ansible RPi K8s CCA - Cluster Control & Automation
 
-This project provides a complete environment to deploy, maintain, and monitor a real Kubernetes cluster running on Raspberry Pi 4 devices. It leverages modern tools such as Ansible, Docker, Helm, K9s, and more.
+# Table of Contents
 
-> Everything you need to build a real Kubernetes cluster on RPi using declarative and automated infrastructure as code.
-
----
-
-## 📦 Features
-
-- 🎛️ Manage your cluster from a Docker container with `ansible`, `kubectl`, `helm`, `k9s`, etc.
-- 🤖 Ansible-driven automation (playbooks, inventory, bootstrap, upgrades)
-- 📦 Optional private Docker registry
-- 🔍 Declarative infrastructure management for nodes and services
-- 🔐 Automatic etcd backup support
-- 🔄 Prepared for remote maintenance and in-place upgrades with no downtime
-
----
-
-## 🧰 Requirements
-
-### Host (your local computer)
-- macOS or Linux
-- [Docker](https://docs.docker.com/get-docker/) installed and running
-
-### Raspberry Pi Cluster
-- 4x Raspberry Pi 4 (8GB recommended, but any model should work)
-- 4x microSD cards (32GB minimum, flashed with Ubuntu Server 24.04 64-bit)
-- Local network (Ethernet switch recommended)
-- USB flash drives or SSD (optional for NFS or persistent volumes)
-
-> 📥 [Download Raspberry Pi Imager](https://www.raspberrypi.com/software/)
->
-> 📘 [Official guide: Flashing OS to SD card](https://www.raspberrypi.com/documentation/computers/getting-started.html)
+1. [Introduction](#introduction)
+2. [Prerequisites](#prerequisites)
+3. [Project Structure](#project-structure)
+4. [Cluster Setup Workflow](#cluster-setup-workflow)
+   - [Control Environment](#control-environment)
+   - [SSH Key Generation](#ssh-key-generation)
+   - [Flashing Raspberry Pi OS](#flashing-raspberry-pi-os)
+   - [Static IP Assignment](#static-ip-assignment)
+   - [Inventory Setup](#inventory-setup)
+   - [Cluster Bootstrapping](#cluster-bootstrapping)
+   - [Node Preparation](#node-preparation)
+   - [Kubernetes Installation](#kubernetes-installation)
+   - [Control Plane Initialization](#control-plane-initialization)
+   - [Worker Node Join](#worker-node-join)
+   - [Cluster Verification](#cluster-verification)
 
 ---
 
-## 🚀 Getting Started
+## Introduction
 
-### 1. Clone the repository
+This project provides a robust, declarative, and fully automated framework for deploying and maintaining a Kubernetes cluster using Raspberry Pi 4 (8GB) boards. It is designed to run on-premise with a minimal yet powerful control environment that includes Ansible, kubectl, helm, k9s, and other tools. Everything is orchestrated via a control script and organized into modular Ansible roles and playbooks.
 
-```bash
-git clone https://github.com/your-username/ansible-rpi-k8s-cca.git
-cd ansible-rpi-k8s-cca
+## Prerequisites
+
+### Hardware
+- 4x Raspberry Pi 4 (8GB recommended)
+- 4x microSD cards **or** USB flash drives (32GB minimum)
+- Ethernet switch and cables
+- Optional USB SSDs for persistent volumes
+
+### Host System (Control Machine)
+- Docker installed and running (Linux or macOS)
+
+> Note: All provisioning and configuration tasks are executed inside a Docker container; the host OS only needs Docker.
+
+## Project Structure
+
+```
+.
+├── cluster-control.sh        # Master script for all operations
+├── config/                   # SSH keys and kubeconfigs
+├── Dockerfile                # Control environment image
+├── README.md                 # This file
+└── workdir/
+    ├── ansible.cfg
+    ├── inventory/
+    │   ├── bootstrap.ini     # Inventory using initial OS user (e.g., ubuntu)
+    │   └── hosts.ini         # Inventory using admin user (e.g., admin)
+    ├── playbooks/            # Ansible playbooks
+    └── roles/                # Modular Ansible roles
 ```
 
-### 2. Launch the control environment
+## Cluster Setup Workflow
+
+Everything is orchestrated through the `cluster-control.sh` script. You should use it exclusively to interact with the cluster environment.
+
+### Control Environment
+
+This phase:
+- Builds a Docker image with all required tools: Ansible, kubectl, helm, k9s, jq, etc.
+- Prepares an isolated control environment for cluster management
+
+Run:
 
 ```bash
 ./cluster-control.sh --build
 ```
 
-This will build the Docker image and launch a container with all the tools required to manage the cluster.
+### SSH Key Generation
 
-### 3. Run commands from inside the container
+This phase:
+- Generates an SSH key pair (ed25519) inside `config/.ssh/`
+- Prepares the public key for inclusion in the OS image flashing process
+
+Run:
 
 ```bash
-ansible-inventory -i ansible/inventory.ini --list
-ansible-playbook ansible/playbooks/setup.yml
-kubectl get nodes
-k9s
+./cluster-control.sh --generate-key
+```
+
+**Why ed25519?**
+- Stronger security with smaller key size
+- Faster connection handshakes
+- Recommended as default in modern OpenSSH (since v7.0)
+
+### Flashing Raspberry Pi OS
+
+This phase:
+- Flashes each Raspberry Pi with a compatible OS (tested with Ubuntu Server 24.10)
+- Applies initial configuration: hostname, SSH key, locale, and timezone
+
+Use Raspberry Pi Imager with advanced settings:
+- Set hostname (e.g., `raspi-master`, `raspi-worker1`, etc.)
+- Set user/password (e.g., `ubuntu`)
+- Enable SSH with the key from `config/.ssh/id_ed25519.pub`
+- Set locale and timezone
+
+Repeat this for each Raspberry Pi device.
+
+> Make sure all devices use Ethernet, not Wi-Fi.
+
+### Static IP Assignment
+
+This phase:
+- Ensures each Raspberry Pi node has a fixed IP address
+- Guarantees predictable inventory and connectivity
+
+Use your router's DHCP reservation or static config to assign:
+
+- `raspi-master` → `192.168.0.100`
+- `raspi-worker1` → `192.168.0.101`
+- `raspi-worker2` → `192.168.0.102`
+- `raspi-worker3` → `192.168.0.103`
+
+Reboot the devices after setting IPs.
+
+### Inventory Setup
+
+This phase:
+- Defines which nodes are part of the cluster and how to access them
+- Starts with the default OS user, then transitions to the `admin` user
+
+Step 1: Create `bootstrap.ini`:
+
+```ini
+[master]
+raspi-master ansible_host=192.168.0.100 ansible_user=ubuntu
+
+[workers]
+raspi-worker1 ansible_host=192.168.0.101 ansible_user=ubuntu
+raspi-worker2 ansible_host=192.168.0.102 ansible_user=ubuntu
+raspi-worker3 ansible_host=192.168.0.103 ansible_user=ubuntu
+
+[cluster:children]
+master
+workers
+```
+
+Step 2: Create a copy named `hosts.ini`, replacing the initial user with `admin`. This will be the process's main inventory file:
+
+```bash
+sed 's/ansible_user=ubuntu/ansible_user=admin/' inventory/bootstrap.ini > inventory/hosts.ini
+```
+
+### Cluster Bootstrapping
+
+This phase:
+- Adds node host keys to `known_hosts` for SSH trust
+- Installs base tools
+- Creates an `admin` user with sudo privileges and SSH-only access
+
+Run:
+
+```bash
+./cluster-control.sh --bootstrap
+```
+
+### Node Preparation
+
+Run with the updated inventory using the admin user:
+
+```bash
+./cluster-control.sh --prepare
+```
+
+This phase:
+- Disables swap
+- Updates the system
+- Sets hostnames and `/etc/hosts`
+- Configures SSH key exchange among nodes
+- Ensures required kernel params and firewall rules
+
+### Kubernetes Installation
+
+This phase:
+- Installs containerd with appropriate configuration for Kubernetes
+- Downloads and installs `kubeadm`, `kubelet`, and `kubectl`
+- Enables and starts the `kubelet` service
+
+Run:
+
+```bash
+./cluster-control.sh --install
+```
+
+### Control Plane Initialization
+
+Initialize the control plane and install Calico:
+
+```bash
+./cluster-control.sh --init
+```
+
+This phase:
+- Runs `kubeadm init`
+- Fetches `admin.conf` and stores it as `config/.kube/config`
+- Installs Tigera Operator and Calico CRDs
+- Removes control-plane taint to allow scheduling
+
+### Worker Node Join
+
+This phase:
+- Copies the `kubeadm_join_cmd.sh` script generated during init to each worker node
+- Executes the script to join each node to the control plane
+- Cleans up the temporary script after successful join
+
+Run:
+
+```bash
+./cluster-control.sh --join
+```
+
+### Cluster Verification
+
+This phase:
+- Waits until all nodes are in `Ready` state
+- Launches a temporary pod to test basic scheduling and networking
+- Deploys a DaemonSet to verify pod-to-pod connectivity between nodes
+- Checks CoreDNS availability and service resolution using a test pod
+
+Run:
+
+```bash
+./cluster-control.sh --verify
 ```
 
 ---
 
-## 📁 Project Structure
+## NFS Storage Setup
 
+To enable dynamic Persistent Volume provisioning via NFS, this project supports setting up an NFS server on the master node with a USB-attached SSD.
+
+### Step 1: Install and Configure NFS Server
+
+Ensure the SSD is connected to `raspi-master` and identified (e.g., `/dev/sda1`). Then run:
+
+```bash
+./cluster-control.sh --nfs
 ```
-├── ansible/               # Playbooks and roles to configure the cluster
-│   ├── inventory.ini      # Inventory file with RPi IPs
-│   ├── playbooks/         # Playbooks organized by function
-│   └── roles/             # Reusable roles
-├── config/                # SSH keys and cluster kubeconfig
-├── cluster-control.sh     # Script to launch the control container
-├── Dockerfile             # Image with all required tools
-└── README.md              # This document
+
+This will:
+- Optionally format the disk (if `nfs_format_device: true`)
+- Mount it to `/mnt/nfs-ssd` with fstab persistence
+- Export it via `nfs-kernel-server` to all cluster nodes
+
+> ⚠️ You can control whether the disk is formatted using the variable `nfs_format_device` in `roles/nfs-server/defaults/main.yml`.
+
+### Step 2: Ensure NFS Client Tools are Installed
+
+The `common` role includes `nfs-common` to allow all nodes to mount NFS shares. If needed, you can reapply the common setup with:
+
+```bash
+./cluster-control.sh --prepare
 ```
 
----
+This guarantees `nfs-common` is installed across the cluster.
 
-## ✅ TODO / Roadmap
+### Step 3: Verify NFS is Reachable from All Nodes
 
-- [ ] Add OS provisioning support (e.g. via Imager or netboot)
-- [ ] Implement automated etcd and volume backups
-- [ ] Add Ansible playbook for rolling Kubernetes upgrades
-- [ ] Integrate cluster monitoring (Prometheus, Grafana, etc.)
-- [ ] Centralized logging stack (Loki, Fluentbit...)
+Run the following to perform a read/write test from each node:
 
----
+```bash
+./cluster-control.sh --verify-nfs
+```
 
-## 📚 Useful Resources
+This creates a temporary mount, writes a test file, reads it back, and cleans up — ensuring that all nodes can access the NFS share correctly.
 
-- [Kubernetes Documentation](https://kubernetes.io/docs/)
-- [Ansible Documentation](https://docs.ansible.com/)
-- [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+### Step 4: Deploy the NFS Provisioner
 
----
+To enable dynamic PVC provisioning via Kubernetes, deploy the external provisioner:
 
-> Made with ❤️ and frustration by [AdriRRP](https://github.com/AdriRRP) 🐧🛠️
+```bash
+./cluster-control.sh --nfs-provisioner
+```
+
+This will:
+- Deploy the `nfs-subdir-external-provisioner` as a Deployment
+- Create the necessary RBAC rules
+- Register a `StorageClass` named `raspi-nfs-provisioner`
+
+The provisioner will mount the exported NFS volume (`/mnt/nfs-ssd`) and create subdirectories automatically for each PVC.
+
+### Step 5: Verify Dynamic PVC Provisioning
+
+After deploying the provisioner, the setup automatically:
+- Creates a temporary PVC using the `raspi-nfs-provisioner` class
+- Attaches it to a busybox Pod
+- Writes a test file inside the volume
+- Verifies the content
+- Cleans up both PVC and Pod
+
+You can also run this verification step again anytime:
+
+```bash
+./cluster-control.sh --nfs-provisioner
+```
+
+This ensures the entire storage pipeline — from NFS server to automatic PVCs — is functioning end-to-end.
 

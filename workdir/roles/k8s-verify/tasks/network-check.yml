@@ -1,0 +1,83 @@
+- name: Deploy DaemonSet for inter-node connectivity test
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: connectivity-test
+        namespace: default
+        labels:
+          app: connectivity-test
+      spec:
+        selector:
+          matchLabels:
+            app: connectivity-test
+        template:
+          metadata:
+            labels:
+              app: connectivity-test
+          spec:
+            containers:
+              - name: test
+                image: busybox
+                command: ["sh", "-c", "sleep 3600"]
+                imagePullPolicy: IfNotPresent
+  register: connectivity_test_ds
+  failed_when: connectivity_test_ds.failed is defined and connectivity_test_ds.failed
+  changed_when: false
+  delegate_to: localhost
+
+- name: Get number of Ready nodes
+  shell: |
+    kubectl get nodes --no-headers --kubeconfig={{ kubeconfig_local_path }} | grep -c ' Ready'
+  register: expected_pods
+  changed_when: false
+  delegate_to: localhost
+
+- name: Wait for DaemonSet pods to be Ready
+  shell: |
+    kubectl get pods -l app=connectivity-test -o json --kubeconfig={{ kubeconfig_local_path }} \
+    | jq '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length'
+  register: ready_pods
+  retries: 20
+  delay: 5
+  until: ready_pods.stdout | int == expected_pods.stdout | int
+  changed_when: false
+  delegate_to: localhost
+
+- name: Get list of pods and their IPs
+  shell: |
+    kubectl get pods -l app=connectivity-test -o json --kubeconfig={{ kubeconfig_local_path }}
+  register: pod_ips
+  changed_when: false
+  delegate_to: localhost
+
+- name: Parse pod name and IPs into list
+  set_fact:
+    pod_info: >-
+      {{
+        pod_ips.stdout | from_json | json_query('items[].{name: metadata.name, ip: status.podIP}')
+      }}
+
+- name: Check inter-node connectivity from each pod
+  shell: |
+    kubectl exec -n default {{ item.0.name }} --kubeconfig={{ kubeconfig_local_path }} -- ping -c 3 -W 2 {{ item.1.ip }}
+  loop: "{{ pod_info | product(pod_info) | list }}"
+  loop_control:
+    label: "Ping from {{ item.0.name }} to {{ item.1.name }}"
+  when: item.0.name != item.1.name  # This prevents pinging the same pod
+  changed_when: false
+  failed_when: ping_result.rc != 0
+  register: ping_result
+  delegate_to: localhost
+
+- name: Cleanup DaemonSet
+  kubernetes.core.k8s:
+    state: absent
+    kind: DaemonSet
+    name: connectivity-test
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  ignore_errors: true
+  delegate_to: localhost

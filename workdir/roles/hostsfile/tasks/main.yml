@@ -1,0 +1,8 @@
+---
+- name: Add cluster IPs to /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item].ansible_host }} {{ item }}"
+    state: present
+  with_items: "{{ groups['cluster'] }}"
+  when: hostvars[item].ansible_host is defined

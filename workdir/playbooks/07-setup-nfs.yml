@@ -1,0 +1,8 @@
+---
+- name: Set up NFS server on raspi-master
+  hosts: raspi-master
+  become: true
+  gather_facts: true
+
+  roles:
+    - nfs-server

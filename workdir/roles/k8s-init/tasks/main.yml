@@ -1,0 +1,11 @@
+- name: Initialize Kubernetes control plane
+  import_tasks: init.yml
+
+- name: Configure kubeconfig locally
+  import_tasks: kubeconfig.yml
+
+- name: Install Calico CNI
+  import_tasks: cni.yml
+
+- name: Allow scheduling on control-plane
+  import_tasks: taint.yml

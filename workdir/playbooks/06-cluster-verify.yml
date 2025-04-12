@@ -1,0 +1,5 @@
+- name: Verify Kubernetes cluster state
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - role: k8s-verify

@@ -1,0 +1,8 @@
+---
+- name: Join worker nodes to Kubernetes cluster
+  hosts: workers
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: k8s-join

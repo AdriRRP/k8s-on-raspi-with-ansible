@@ -1,0 +1,39 @@
+- name: Initialize Kubernetes cluster using kubeadm
+  command: kubeadm init --pod-network-cidr={{ pod_network_cidr }}
+  register: kubeadm_init_result
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Save kubeadm init output to temporary file
+  copy:
+    content: "{{ kubeadm_init_result.stdout }}"
+    dest: /tmp/kubeadm-init.log
+    mode: '0644'
+  when: kubeadm_init_result is defined
+
+- name: Fetch kubeadm init log to control node
+  fetch:
+    src: /tmp/kubeadm-init.log
+    dest: "{{ kubernetes_outputs }}/kubeadm-init.log"
+    flat: true
+  when: kubeadm_init_result is defined
+
+- name: Extract kubeadm join command
+  command: kubeadm token create --print-join-command
+  register: kubeadm_join_command
+  changed_when: false
+  when: kubeadm_init_result is defined
+
+- name: Save join command to temporary file
+  copy:
+    content: "{{ kubeadm_join_command.stdout }}"
+    dest: /tmp/kubeadm_join_cmd.sh
+    mode: '0644'
+  when: kubeadm_join_command is defined
+
+- name: Fetch join command file to control node
+  fetch:
+    src: /tmp/kubeadm_join_cmd.sh
+    dest: "{{ kubernetes_outputs }}/kubeadm_join_cmd.sh"
+    flat: true
+  when: kubeadm_join_command is defined

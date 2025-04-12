@@ -1,0 +1,12 @@
+---
+- name: Verify NFS accessibility from all nodes
+  hosts: cluster
+  become: true
+  gather_facts: false
+
+  vars:
+    nfs_export_mount: "/mnt/nfs-ssd"
+
+  tasks:
+    - name: Run NFS verification tasks
+      import_tasks: ../roles/nfs-server/tasks/verify.yml

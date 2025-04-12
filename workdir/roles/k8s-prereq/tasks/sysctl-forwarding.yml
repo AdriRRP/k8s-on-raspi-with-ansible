@@ -1,0 +1,33 @@
+---
+- name: Set net.ipv4.ip_forward to 1 at runtime
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: yes
+  become: true
+
+- name: Ensure persistent sysctl setting for ip_forward
+  copy:
+    dest: /etc/sysctl.d/99-k8s-ipforward.conf
+    content: "net.ipv4.ip_forward = 1\n"
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Reload all sysctl settings
+  command: sysctl --system
+  become: true
+  register: sysctl_reload
+  changed_when: "'net.ipv4.ip_forward = 1' in sysctl_reload.stdout"
+
+- name: Check current value of net.ipv4.ip_forward
+  command: sysctl -n net.ipv4.ip_forward
+  register: ip_forward_result
+  changed_when: false
+  failed_when: ip_forward_result.stdout != '1'
+
+- name: Confirm IPv4 forwarding is enabled
+  debug:
+    msg: "IPv4 forwarding is correctly enabled and persistent."

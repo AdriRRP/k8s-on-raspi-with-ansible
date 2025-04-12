@@ -1,0 +1,42 @@
+---
+- name: Wait for all nodes to be Ready
+  shell: |
+    kubectl get nodes --no-headers --kubeconfig={{ kubeconfig_local_path }} | grep -c ' NotReady' || true
+  register: not_ready_nodes
+  retries: 30
+  delay: 10
+  until: not_ready_nodes.stdout | int == 0
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Ensure test pod is not present from previous runs
+  shell: kubectl delete pod connectivity-test --ignore-not-found --kubeconfig={{ kubeconfig_local_path }}
+  changed_when: false
+  delegate_to: localhost
+
+- name: Deploy test pod to verify networking and scheduling
+  shell: |
+    kubectl run connectivity-test \
+      --kubeconfig={{ kubeconfig_local_path }} \
+      --image=busybox \
+      --restart=Never \
+      --command -- sleep 30
+  register: test_pod_created
+  changed_when: true
+  delegate_to: localhost
+
+- name: Wait for test pod to complete
+  shell: |
+    kubectl wait pod connectivity-test \
+      --for=condition=Ready \
+      --timeout=60s \
+      --kubeconfig={{ kubeconfig_local_path }}
+  register: test_pod_ready
+  changed_when: false
+  delegate_to: localhost
+
+- name: Delete test pod
+  shell: kubectl delete pod connectivity-test --kubeconfig={{ kubeconfig_local_path }}
+  changed_when: true
+  delegate_to: localhost

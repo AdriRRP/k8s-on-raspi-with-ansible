@@ -1,0 +1,24 @@
+# Step 1: Add known_hosts entries BEFORE trying to connect
+- name: Ensure node host keys are trusted
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Scan and add each node to known_hosts
+      ansible.builtin.lineinfile:
+        path: /home/ansible/.ssh/known_hosts
+        line: "{{ lookup('pipe', 'ssh-keyscan -H ' + hostvars[item].ansible_host) }}"
+        create: yes
+        state: present
+      loop: "{{ groups['all'] }}"
+      when: hostvars[item].ansible_host is defined
+      tags: ssh
+
+# Step 2: Bootstrap RPi nodes
+- name: Bootstrap Raspberry Pi nodes using default user
+  hosts: all
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: common
+    - role: user-management

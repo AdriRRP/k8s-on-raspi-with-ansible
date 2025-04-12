@@ -1,0 +1,8 @@
+
+pod_network_cidr: "192.168.0.0/16"
+kubeconfig_path: "/etc/kubernetes/admin.conf"
+kubeconfig_local_path: "/home/ansible/.kube/config"
+kubernetes_outputs: "/home/ansible/.kube/outputs/"
+calico_version: "v3.29.3"
+calico_tigera_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml"
+calico_crds_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml"

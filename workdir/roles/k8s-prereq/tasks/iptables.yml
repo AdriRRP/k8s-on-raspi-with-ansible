@@ -1,0 +1,74 @@
+- name: Set facts for dynamic port range
+  set_fact:
+    dynamic_port_min: "{{ dynamic_ports | min }}"
+    dynamic_port_max: "{{ dynamic_ports | max }}"
+
+- name: Remove existing iptables rules for Kubernetes static ports
+  shell: >
+    iptables -D INPUT -p tcp --dport {{ item }} -j ACCEPT 2>/dev/null || true
+  loop: "{{ static_ports | select('number') | list }}"
+  when:
+    - iptables_installed | default(false)
+    - not (ufw_installed | default(false) and ufw_active | default(false))
+  become: true
+  changed_when: false
+  failed_when: false
+
+- name: Remove existing iptables rule for NodePort range
+  shell: >
+    iptables -D INPUT -p tcp --dport {{ dynamic_port_min }}:{{ dynamic_port_max }} -j ACCEPT 2>/dev/null || true
+  when:
+    - iptables_installed | default(false)
+    - not (ufw_installed | default(false) and ufw_active | default(false))
+  become: true
+  changed_when: false
+  failed_when: false
+
+- name: Add iptables rules for static ports
+  shell: >
+    iptables -A INPUT -p tcp --dport {{ item }} -j ACCEPT
+  loop: "{{ static_ports | select('number') | list }}"
+  when:
+    - iptables_installed | default(false)
+    - not (ufw_installed | default(false) and ufw_active | default(false))
+  become: true
+  changed_when: true
+
+- name: Add iptables rule for NodePort range
+  shell: >
+    iptables -A INPUT -p tcp --dport {{ dynamic_port_min }}:{{ dynamic_port_max }} -j ACCEPT
+  when:
+    - iptables_installed | default(false)
+    - not (ufw_installed | default(false) and ufw_active | default(false))
+  become: true
+  changed_when: true
+
+- name: Ensure iptables-persistent is installed (Debian only)
+  apt:
+    name: iptables-persistent
+    state: present
+    update_cache: true
+  when:
+    - ansible_facts['os_family'] == 'Debian'
+    - iptables_installed | default(false)
+  become: true
+
+- name: Save iptables rules to disk (Debian/Ubuntu)
+  shell: iptables-save > /etc/iptables/rules.v4
+  when:
+    - ansible_facts['os_family'] == 'Debian'
+    - iptables_installed | default(false)
+  become: true
+
+- name: Show current Kubernetes iptables rules
+  shell: >
+    iptables -S | grep -E '{{ static_ports | select("number") | map("string") | join("|") }}|{{ dynamic_port_min }}:{{ dynamic_port_max }}'
+  register: iptables_summary
+  when: iptables_installed | default(false)
+  changed_when: false
+  failed_when: false
+
+- name: Display summary of iptables rules applied
+  debug:
+    var: iptables_summary.stdout_lines
+  when: iptables_summary.stdout_lines is defined

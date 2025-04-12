@@ -1,0 +1,9 @@
+---
+- name: Include update tasks
+  import_tasks: update.yml
+
+- name: Include swap disabling tasks
+  import_tasks: swap.yml
+
+- name: Include tools installation tasks
+  import_tasks: tools.yml

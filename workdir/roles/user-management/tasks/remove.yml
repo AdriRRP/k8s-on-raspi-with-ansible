@@ -1,0 +1,7 @@
+---
+- name: Remove ubuntu user if not in use
+  user:
+    name: ubuntu
+    state: absent
+    remove: yes
+  when: ansible_user != "ubuntu"
