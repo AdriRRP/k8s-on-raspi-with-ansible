@@ -7,6 +7,24 @@
     state: present
     kubeconfig: "{{ kubeconfig_local_path }}"
 
+- name: Create ServiceAccount for Prometheus
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-serviceaccount.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Create ClusterRole for Prometheus
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-clusterrole.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Create ClusterRoleBinding for Prometheus
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-clusterrolebinding.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
 - name: Create ConfigMap for Prometheus configuration
   kubernetes.core.k8s:
     state: present
