@@ -1,0 +1,5 @@
+kubeconfig_local_path: /home/ansible/.kube/config
+monitoring_namespace: monitoring
+storage_class_name: raspi-nfs-provisioner
+prometheus_pvc_size: 10Gi
+prometheus_retention_time: 7d

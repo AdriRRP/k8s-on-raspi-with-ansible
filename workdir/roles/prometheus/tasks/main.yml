@@ -1,0 +1,59 @@
+---
+- name: Ensure monitoring namespace exists
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ monitoring_namespace }}"
+    state: present
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Create ConfigMap for Prometheus configuration
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-configmap.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Prometheus Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-deployment.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Prometheus PVC
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-pvc.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Prometheus Service
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-service.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Wait until Prometheus pod is running and ready
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ monitoring_namespace }}"
+    label_selectors:
+      - app=prometheus
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: prometheus_pods
+  retries: 10
+  delay: 10
+  until:
+    - prometheus_pods.resources | length > 0
+    - prometheus_pods.resources[0].status.phase == "Running"
+    - prometheus_pods.resources[0].status.containerStatuses is defined
+    - prometheus_pods.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | length == prometheus_pods.resources[0].status.containerStatuses | length
+  changed_when: false
+
+- name: Get Prometheus LoadBalancer IP
+  shell: |
+    kubectl get svc -n {{ monitoring_namespace }} prometheus -o jsonpath='{.status.loadBalancer.ingress[0].ip}' --kubeconfig={{ kubeconfig_local_path }}
+  register: prometheus_lb_ip
+  changed_when: false
+
+- name: Show Prometheus access URL
+  ansible.builtin.debug:
+    msg: "Prometheus is running and available at http://{{ prometheus_lb_ip.stdout }}:9090"

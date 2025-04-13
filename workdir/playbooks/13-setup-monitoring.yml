@@ -1,0 +1,11 @@
+---
+- name: Deploy lightweight monitoring stack (Prometheus + Grafana + Exporters)
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - prometheus
+   # - grafana
+   # - node-exporter
+   # - kube-state-metrics
+   # - alertmanager
