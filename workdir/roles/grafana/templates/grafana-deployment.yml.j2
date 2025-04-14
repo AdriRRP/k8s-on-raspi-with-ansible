@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ monitoring_namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:latest
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "{{ grafana_admin_user }}"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "{{ grafana_admin_password }}"
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: grafana-config
+              mountPath: /etc/grafana/grafana.ini
+              subPath: grafana.ini
+              readOnly: true
+            - name: datasource
+              mountPath: /etc/grafana/provisioning/datasources/prometheus-datasource.yaml
+              subPath: prometheus-datasource.yaml
+              readOnly: true
+            - name: grafana-storage
+              mountPath: /var/lib/grafana
+      volumes:
+        - name: grafana-config
+          configMap:
+            name: grafana-config-ini
+        - name: datasource
+          configMap:
+            name: grafana-datasource
+        - name: grafana-storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc

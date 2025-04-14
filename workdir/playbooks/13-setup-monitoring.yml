@@ -7,5 +7,5 @@
     - prometheus
     - node-exporter
     - kube-state-metrics
-   # - grafana
+    - grafana
    # - alertmanager

@@ -1,0 +1,48 @@
+---
+- name: Create ConfigMap for grafana.ini provisioning
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-configmap-ini.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Grafana PVC
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-pvc.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Grafana Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-deployment.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Grafana Service
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-service.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Get Grafana LoadBalancer IP
+  shell: >
+    kubectl get svc -n {{ monitoring_namespace }} grafana
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+    --kubeconfig={{ kubeconfig_local_path }}
+  register: grafana_ip
+  changed_when: false
+
+- name: Wait for Grafana to be ready
+  uri:
+    url: "http://{{ grafana_ip.stdout }}:3000/api/health"
+    method: GET
+    status_code: 200
+  register: grafana_ready
+  retries: 10
+  delay: 5
+  until: grafana_ready.status == 200
+  changed_when: false
+
+- name: Show Grafana URL
+  ansible.builtin.debug:
+    msg: "Grafana is available at http://{{ grafana_ip.stdout }}:3000 (user: {{ grafana_admin_user }})"
+

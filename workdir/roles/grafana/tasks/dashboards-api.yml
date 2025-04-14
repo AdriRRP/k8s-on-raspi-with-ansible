@@ -1,0 +1,126 @@
+- name: Get Grafana LoadBalancer IP
+  shell: >
+    kubectl get svc -n {{ monitoring_namespace }} grafana
+    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+    --kubeconfig={{ kubeconfig_local_path }}
+  register: grafana_ip
+  changed_when: false
+
+- name: Download dashboards from grafana.com
+  get_url:
+    url: "https://grafana.com/api/dashboards/{{ item.id }}/revisions/latest/download"
+    dest: "/tmp/{{ item.name }}.json"
+  loop: "{{ grafana_dashboards }}"
+  when: grafana_dashboards is defined
+
+- name: Prepare dashboard metadata
+  set_fact:
+    dashboard_title: "{{ item.name | replace('-', ' ') | title }}"
+    dashboard_uid: "{{ item.name }}"
+  loop: "{{ grafana_dashboards }}"
+  loop_control:
+    loop_var: item
+  register: prepared_dashboards
+
+- name: Validate and wrap dashboard for API
+  shell: |
+    RAW="/tmp/{{ item.name }}.json"
+
+    # Detect if wrapped in 'dashboard'
+    if jq -e 'has("dashboard")' "$RAW" >/dev/null; then
+      dash=$(jq '.dashboard' "$RAW")
+    else
+      dash=$(cat "$RAW")
+    fi
+
+    title=$(echo "$dash" | jq -r '.title // empty')
+    uid=$(echo "$dash" | jq -r '.uid // empty')
+
+    if [ -z "$title" ]; then
+      title="{{ item.name | replace('-', ' ') | title }}"
+      dash=$(echo "$dash" | jq --arg title "$title" '.title = $title')
+    fi
+
+    if [ -z "$uid" ]; then
+      uid="{{ item.name }}"
+      dash=$(echo "$dash" | jq --arg uid "$uid" '.uid = $uid')
+    fi
+
+    # Add __inputs if missing
+    has_inputs=$(echo "$dash" | jq 'has("__inputs")')
+    if [ "$has_inputs" != "true" ]; then
+      dash=$(echo "$dash" | jq '. + {
+        "__inputs": [{
+          "name": "DS_PROMETHEUS",
+          "label": "Prometheus",
+          "description": "",
+          "type": "datasource",
+          "pluginId": "prometheus",
+          "pluginName": "Prometheus"
+        }]
+      }')
+    fi
+
+    # Add __requires if missing
+    has_requires=$(echo "$dash" | jq 'has("__requires")')
+    if [ "$has_requires" != "true" ]; then
+      dash=$(echo "$dash" | jq '. + {
+        "__requires": [{
+          "type": "datasource",
+          "id": "prometheus",
+          "name": "Prometheus",
+          "version": "1.0.0"
+        }]
+      }')
+    fi
+
+    # Replace datasource variable reference if any
+    dash=$(echo "$dash" | sed -E 's/\$\{(DS_PROMETHEUS|VAR_DATASOURCE)\}/Prometheus/g')
+
+    # Wrap and overwrite original
+    echo "{\"dashboard\": $dash, \"overwrite\": true}" > "$RAW"
+  args:
+    executable: /bin/bash
+  loop: "{{ grafana_dashboards }}"
+
+- name: Import dashboards via Grafana API
+  uri:
+    url: "http://{{ grafana_ip.stdout }}:3000/api/dashboards/db"
+    method: POST
+    user: "{{ grafana_admin_user }}"
+    password: "{{ grafana_admin_password }}"
+    force_basic_auth: true
+    headers:
+      Content-Type: "application/json"
+    body: "{{ lookup('file', '/tmp/' ~ item.item.name ~ '.json') | string }}"
+    status_code: 200
+  loop: "{{ prepared_dashboards.results }}"
+  when: grafana_dashboards is defined
+
+- name: Verify dashboards via Grafana API
+  block:
+    - name: Query Grafana dashboards API
+      uri:
+        url: "http://{{ grafana_ip.stdout }}:3000/api/search"
+        method: GET
+        user: "{{ grafana_admin_user }}"
+        password: "{{ grafana_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: 200
+      register: grafana_dashboards_check
+      retries: 5
+      delay: 5
+      until:
+        grafana_dashboards_check.json is defined and
+        grafana_dashboards_check.json | length > 0
+      changed_when: false
+
+    - name: Confirm Grafana dashboards are available
+      ansible.builtin.debug:
+        msg: "Grafana has loaded {{ grafana_dashboards_check.json | length }} dashboard(s)."
+
+  rescue:
+    - name: Warn if dashboard verification failed
+      ansible.builtin.debug:
+        msg: "WARNING: Grafana is running but dashboard verification failed. Dashboards may not have loaded yet or credentials may have changed."

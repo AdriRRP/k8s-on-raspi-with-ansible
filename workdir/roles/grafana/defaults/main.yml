@@ -1,0 +1,11 @@
+kubeconfig_local_path: /home/ansible/.kube/config
+monitoring_namespace: monitoring
+grafana_admin_user: admin
+grafana_admin_password: admin
+storage_class_name: raspi-nfs-provisioner
+
+grafana_dashboards:
+  - id: 1860
+    name: node-exporter-full
+  - id: 13332
+    name: kube-state-metrics
