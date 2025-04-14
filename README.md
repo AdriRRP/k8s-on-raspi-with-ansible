@@ -16,6 +16,11 @@
    - [Control Plane Initialization](#control-plane-initialization)
    - [Worker Node Join](#worker-node-join)
    - [Cluster Verification](#cluster-verification)
+   - [NFS Storage Setup](#nfs-storage-setup)
+   - [Load Balancer Support with MetalLB](#load-balancer-support-with-metallb)
+   - [Internal Container Registry](#internal-container-registry)
+   - [Monitoring Stack](#monitoring-stack)
+
 
 ---
 
@@ -345,7 +350,7 @@ Ensure that the selected IP range is not used by your router's DHCP pool and is 
 
 ---
 
-## Internal Container Registry (in Kubernetes)
+## Internal Container Registry
 
 This project includes a self-hosted container image registry that runs inside the Kubernetes cluster and is accessible both internally and (optionally) externally via MetalLB.
 
@@ -408,3 +413,79 @@ If you want persistence, modify the Deployment to use a PersistentVolumeClaim in
 - It is intended for internal development use only.
 - If you plan to expose it beyond your LAN, secure it with a reverse proxy or use TLS + basic auth.
 
+---
+
+## Monitoring Stack
+
+This project includes a lightweight monitoring stack based on Prometheus, Grafana, and exporters such as `node-exporter` and `kube-state-metrics`. The stack is fully integrated with Kubernetes and managed via Ansible.
+
+### Deployment
+
+To deploy the monitoring stack:
+
+```bash
+./cluster-control.sh --monitoring
+```
+
+This will:
+
+- Create the `monitoring` namespace (if missing).
+- Deploy Prometheus with:
+  - Kubernetes service discovery.
+  - Persistent volume (PVC).
+  - MetalLB LoadBalancer service.
+- Deploy `node-exporter` as a DaemonSet.
+- Deploy `kube-state-metrics`.
+- Deploy Grafana with:
+  - Prometheus as default datasource.
+  - Persistent storage.
+  - API-based dashboard provisioning.
+
+### Accessing Grafana
+
+Grafana will be exposed at:
+
+```
+http://<grafana-loadbalancer-ip>:3000
+```
+
+Default credentials:
+
+- **Username:** `admin`
+- **Password:** `admin` (or as defined in `defaults/main.yml`)
+
+### Adding Dashboards by ID
+
+To customize which dashboards are imported into Grafana, edit this list in:
+
+```
+roles/grafana/defaults/main.yml
+```
+
+```yaml
+grafana_dashboards:
+  - id: 1860
+    name: node-exporter-full
+  - id: 13332
+    name: kube-state-metrics
+```
+
+You can find more dashboards at [grafana.com/dashboards](https://grafana.com/grafana/dashboards/).
+
+### Updating Dashboards
+
+To re-import dashboards:
+
+```bash
+./cluster-control.sh --monitoring
+```
+
+This ensures dashboards are re-fetched and re-imported via Grafana’s API.
+
+### Notes
+
+- Dashboards are validated (must have `uid` and `title`).
+- `${DS_PROMETHEUS}` placeholders are auto-replaced with the correct datasource.
+- Uses the Grafana HTTP API — no need to mount dashboard JSON files.
+
+> This monitoring setup is optimized for Raspberry Pi clusters: low memory footprint and declarative configuration.
