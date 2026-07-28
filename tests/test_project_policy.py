@@ -15,10 +15,22 @@ class ProjectPolicyTests(unittest.TestCase):
 
     def test_control_image_verifies_kubectl_and_pins_python_tools(self):
         dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
         requirements = (REPO_ROOT / "workdir" / "requirements-control.txt").read_text()
         lock = (REPO_ROOT / "workdir" / "requirements-control-lock.txt").read_text()
 
-        self.assertRegex(dockerfile.splitlines()[0], r"^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$")
+        base_image = re.fullmatch(
+            r"FROM ubuntu:(\d+\.\d+)@sha256:[a-f0-9]{64}",
+            dockerfile.splitlines()[0],
+        )
+        install_version = re.search(
+            r'^\s+install_version: "(\d+\.\d+)"$',
+            group_vars,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(base_image)
+        self.assertIsNotNone(install_version)
+        self.assertEqual(base_image.group(1), install_version.group(1))
         self.assertIn("kubectl.sha256", dockerfile)
         self.assertIn("sha256sum --check --strict", dockerfile)
         self.assertIn("ansible-core==", requirements)
