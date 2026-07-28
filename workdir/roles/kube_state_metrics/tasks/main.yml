@@ -1,0 +1,49 @@
+---
+- name: Detect cluster version for kube-state-metrics compatibility
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - version
+      - --output=json
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: kube_state_metrics_cluster_version_raw
+  changed_when: false
+  delegate_to: localhost
+  when: kube_state_metrics_compatibility_minor_version == 'auto'
+
+- name: Resolve kube-state-metrics compatibility target
+  ansible.builtin.set_fact:
+    kube_state_metrics_compatibility_minor_version_resolved: >-
+      {{
+        kube_state_metrics_compatibility_minor_version
+        if kube_state_metrics_compatibility_minor_version != 'auto'
+        else (
+          (
+            (kube_state_metrics_cluster_version_raw.stdout | from_json).serverVersion.gitVersion
+            | regex_replace('^v', '')
+          ).split('.')[:2] | join('.')
+        )
+      }}
+    kube_state_metrics_image_resolved: >-
+      {{
+        kube_state_metrics_supported_images.get(
+          (
+            kube_state_metrics_compatibility_minor_version
+            if kube_state_metrics_compatibility_minor_version != 'auto'
+            else (
+              (
+                (kube_state_metrics_cluster_version_raw.stdout | from_json).serverVersion.gitVersion
+                | regex_replace('^v', '')
+              ).split('.')[:2] | join('.')
+            )
+          ),
+          kube_state_metrics_default_image
+        )
+      }}
+  delegate_to: localhost
+
+- name: Include kube-state-metrics RBAC tasks
+  ansible.builtin.import_tasks: rbac.yml
+
+- name: Include kube-state-metrics deployment tasks
+  ansible.builtin.import_tasks: deploy.yml

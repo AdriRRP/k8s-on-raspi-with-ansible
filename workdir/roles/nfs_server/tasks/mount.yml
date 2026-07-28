@@ -1,0 +1,22 @@
+---
+- name: Ensure mount point exists
+  ansible.builtin.file:
+    path: "{{ nfs_export_mount }}"
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Get UUID of device
+  ansible.builtin.command: blkid -s UUID -o value {{ nfs_export_device }}
+  register: nfs_uuid
+  changed_when: false
+  become: true
+
+- name: Mount device with fstab entry
+  ansible.posix.mount:
+    path: "{{ nfs_export_mount }}"
+    src: "UUID={{ nfs_uuid.stdout }}"
+    fstype: ext4
+    opts: "{{ nfs_mount_options }}"
+    state: mounted
+  become: true

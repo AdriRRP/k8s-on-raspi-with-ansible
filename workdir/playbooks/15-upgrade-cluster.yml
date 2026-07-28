@@ -1,0 +1,73 @@
+---
+- name: Run cluster upgrade preflight
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - role: cluster_preflight
+    - role: k8s_upgrade_preflight
+
+- name: Upgrade control-plane nodes one at a time
+  hosts: control_plane
+  serial: 1
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+
+  roles:
+    - role: k8s_upgrade_control_plane
+
+- name: Upgrade worker nodes one at a time
+  hosts: workers
+  serial: 1
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+
+  roles:
+    - role: k8s_upgrade_workers
+
+- name: Re-verify upgraded cluster
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reconcile installed platform addons after Kubernetes upgrade
+      ansible.builtin.include_role:
+        name: k8s_upgrade_addons
+      when:
+        - upgrade_execution_mode == 'apply'
+        - upgrade_reconcile_platform_addons | bool
+
+    - name: Re-run cluster verification after applied upgrade
+      ansible.builtin.include_role:
+        name: k8s_verify
+      when: upgrade_execution_mode == 'apply'
+
+- name: Capture post-upgrade snapshot
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Capture final cluster snapshot
+      ansible.builtin.include_role:
+        name: k8s_upgrade_snapshot
+      vars:
+        k8s_upgrade_snapshot_target_file: >-
+          {{
+            hostvars['localhost'].upgrade_post_snapshot_file_resolved
+            | default(upgrade_post_snapshot_file)
+          }}
+      when:
+        - upgrade_capture_snapshots | bool
+        - upgrade_execution_mode == 'apply'
+
+    - name: Report dry-run completion
+      ansible.builtin.debug:
+        msg: >-
+          Dry-run complete. No mutations were applied.
+          Review {{ upgrade_plan_file }} and {{
+            hostvars['localhost'].upgrade_pre_snapshot_file_resolved | default(upgrade_pre_snapshot_file)
+          }}
+          before running with upgrade_execution_mode=apply.
+      when: upgrade_execution_mode == 'dry-run'

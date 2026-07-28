@@ -1,491 +1,347 @@
+# Raspberry Pi Kubernetes with Ansible
 
-# Table of Contents
+An opinionated, containerized Ansible project for building and maintaining a
+small `kubeadm` Kubernetes cluster on Raspberry Pi nodes running Ubuntu Server
+ARM64.
 
-1. [Introduction](#introduction)
-2. [Prerequisites](#prerequisites)
-3. [Project Structure](#project-structure)
-4. [Cluster Setup Workflow](#cluster-setup-workflow)
-   - [Control Environment](#control-environment)
-   - [SSH Key Generation](#ssh-key-generation)
-   - [Flashing Raspberry Pi OS](#flashing-raspberry-pi-os)
-   - [Static IP Assignment](#static-ip-assignment)
-   - [Inventory Setup](#inventory-setup)
-   - [Cluster Bootstrapping](#cluster-bootstrapping)
-   - [Node Preparation](#node-preparation)
-   - [Kubernetes Installation](#kubernetes-installation)
-   - [Control Plane Initialization](#control-plane-initialization)
-   - [Worker Node Join](#worker-node-join)
-   - [Cluster Verification](#cluster-verification)
-   - [NFS Storage Setup](#nfs-storage-setup)
-   - [Load Balancer Support with MetalLB](#load-balancer-support-with-metallb)
-   - [Internal Container Registry](#internal-container-registry)
-   - [Monitoring Stack](#monitoring-stack)
+It automates:
 
+- host bootstrap, OS tuning and flash-wear reduction
+- containerd and Kubernetes installation
+- control-plane initialization and worker enrollment
+- rolling Ubuntu and Kubernetes upgrades
+- NFS storage, MetalLB, an internal registry and lightweight monitoring
+- cluster health checks, snapshots and recovery artifacts
 
----
+The default topology is one control-plane node and three workers. It is intended
+for a homelab or edge lab, not as a highly available production platform.
 
-## Introduction
+## Safety model
 
-This project provides a robust, declarative, and fully automated framework for deploying and maintaining a Kubernetes cluster using Raspberry Pi 4 (8GB) boards. It is designed to run on-premise with a minimal yet powerful control environment that includes Ansible, kubectl, helm, k9s, and other tools. Everything is orchestrated via a control script and organized into modular Ansible roles and playbooks.
+- All control tooling runs in a pinned Docker image.
+- Runtime credentials and generated outputs stay under `config/`, outside Git
+  and outside the Docker build context.
+- Kubernetes and Ubuntu upgrades default to `dry-run`; mutation requires
+  `--apply-upgrade`.
+- Nodes are upgraded serially, with preflight checks, drain/uncordon, snapshots
+  and post-upgrade verification.
+- Registry and monitoring services default to `ClusterIP`.
+- Kubernetes workloads have resource limits, health probes and conservative
+  security contexts.
+- Control-plane restore exists as experimental code, but its end-to-end
+  fire-drill is not yet accepted. Do not rely on it as the only backup strategy.
 
-## Prerequisites
+## Requirements
 
-### Hardware
-- 4x Raspberry Pi 4 (8GB recommended)
-- 4x microSD cards **or** USB flash drives (32GB minimum)
-- Ethernet switch and cables
-- Optional USB SSDs for persistent volumes
+Control host:
 
-### Host System (Control Machine)
-- Docker installed and running (Linux or macOS)
+- macOS or Linux with Docker
+- network access to every node over SSH
+- `python3`, `xz` and `sudo` only for the optional macOS media-flashing flow
 
-> Note: All provisioning and configuration tasks are executed inside a Docker container; the host OS only needs Docker.
+Nodes:
 
-## Project Structure
+- Raspberry Pi 4 or newer with 64-bit Ubuntu Server
+- stable wired networking and unique hostnames
+- DHCP reservations or static addresses matching the inventories
+- SSH access for the bootstrap user
 
-```
-.
-├── cluster-control.sh        # Master script for all operations
-├── config/                   # SSH keys and kubeconfigs
-├── Dockerfile                # Control environment image
-├── README.md                 # This file
-└── workdir/
-    ├── ansible.cfg
-    ├── inventory/
-    │   ├── bootstrap.ini     # Inventory using initial OS user (e.g., ubuntu)
-    │   └── hosts.ini         # Inventory using admin user (e.g., admin)
-    ├── playbooks/            # Ansible playbooks
-    └── roles/                # Modular Ansible roles
-```
+Review these files before the first run:
 
-## Cluster Setup Workflow
+- `workdir/inventory/bootstrap.ini`: initial Ubuntu user and node addresses
+- `workdir/inventory/hosts.ini`: managed admin user and node addresses
+- `workdir/inventory/group_vars/all.yml`: versions and cluster policy
+- `workdir/roles/nfs_server/defaults/main.yml`: NFS disk and export settings
+- `workdir/roles/metallb/defaults/main.yml`: address pool
 
-Everything is orchestrated through the `cluster-control.sh` script. You should use it exclusively to interact with the cluster environment.
+The sample inventories use `192.168.0.100-103`; adapt them to your LAN.
 
-### Control Environment
+## Quick start
 
-This phase:
-- Builds a Docker image with all required tools: Ansible, kubectl, helm, k9s, jq, etc.
-- Prepares an isolated control environment for cluster management
-
-Run:
+Build the control image:
 
 ```bash
 ./cluster-control.sh --build
 ```
 
-### SSH Key Generation
-
-This phase:
-- Generates an SSH key pair (ed25519) inside `config/.ssh/`
-- Prepares the public key for inclusion in the OS image flashing process
-
-Run:
+Generate the control SSH key:
 
 ```bash
 ./cluster-control.sh --generate-key
 ```
 
-**Why ed25519?**
-- Stronger security with smaller key size
-- Faster connection handshakes
-- Recommended as default in modern OpenSSH (since v7.0)
-
-### Flashing Raspberry Pi OS
-
-This phase:
-- Flashes each Raspberry Pi with a compatible OS (tested with Ubuntu Server 24.10)
-- Applies initial configuration: hostname, SSH key, locale, and timezone
-
-Use Raspberry Pi Imager with advanced settings:
-- Set hostname (e.g., `raspi-master`, `raspi-worker1`, etc.)
-- Set user/password (e.g., `ubuntu`)
-- Enable SSH with the key from `config/.ssh/id_ed25519.pub`
-- Set locale and timezone
-
-Repeat this for each Raspberry Pi device.
-
-> Make sure all devices use Ethernet, not Wi-Fi.
-
-### Static IP Assignment
-
-This phase:
-- Ensures each Raspberry Pi node has a fixed IP address
-- Guarantees predictable inventory and connectivity
-
-Use your router's DHCP reservation or static config to assign:
-
-- `raspi-master` → `192.168.0.100`
-- `raspi-worker1` → `192.168.0.101`
-- `raspi-worker2` → `192.168.0.102`
-- `raspi-worker3` → `192.168.0.103`
-
-Reboot the devices after setting IPs.
-
-### Inventory Setup
-
-This phase:
-- Defines which nodes are part of the cluster and how to access them
-- Starts with the default OS user, then transitions to the `admin` user
-
-Step 1: Create `bootstrap.ini`:
-
-```ini
-[master]
-raspi-master ansible_host=192.168.0.100 ansible_user=ubuntu
-
-[workers]
-raspi-worker1 ansible_host=192.168.0.101 ansible_user=ubuntu
-raspi-worker2 ansible_host=192.168.0.102 ansible_user=ubuntu
-raspi-worker3 ansible_host=192.168.0.103 ansible_user=ubuntu
-
-[cluster:children]
-master
-workers
-```
-
-Step 2: Create a copy named `hosts.ini`, replacing the initial user with `admin`. This will be the process's main inventory file:
-
-```bash
-sed 's/ansible_user=ubuntu/ansible_user=admin/' inventory/bootstrap.ini > inventory/hosts.ini
-```
-
-### Cluster Bootstrapping
-
-This phase:
-- Adds node host keys to `known_hosts` for SSH trust
-- Installs base tools
-- Creates an `admin` user with sudo privileges and SSH-only access
-
-Run:
+Add `config/.ssh/id_ed25519.pub` to the initial Ubuntu user on each node, then
+run the lifecycle in order:
 
 ```bash
 ./cluster-control.sh --bootstrap
-```
-
-### Node Preparation
-
-Run with the updated inventory using the admin user:
-
-```bash
 ./cluster-control.sh --prepare
-```
-
-This phase:
-- Disables swap
-- Updates the system
-- Sets hostnames and `/etc/hosts`
-- Configures SSH key exchange among nodes
-- Ensures required kernel params and firewall rules
-
-### Kubernetes Installation
-
-This phase:
-- Installs containerd with appropriate configuration for Kubernetes
-- Downloads and installs `kubeadm`, `kubelet`, and `kubectl`
-- Enables and starts the `kubelet` service
-
-Run:
-
-```bash
 ./cluster-control.sh --install
-```
-
-### Control Plane Initialization
-
-Initialize the control plane and install Calico:
-
-```bash
 ./cluster-control.sh --init
-```
-
-This phase:
-- Runs `kubeadm init`
-- Fetches `admin.conf` and stores it as `config/.kube/config`
-- Installs Tigera Operator and Calico CRDs
-- Removes control-plane taint to allow scheduling
-
-### Worker Node Join
-
-This phase:
-- Copies the `kubeadm_join_cmd.sh` script generated during init to each worker node
-- Executes the script to join each node to the control plane
-- Cleans up the temporary script after successful join
-
-Run:
-
-```bash
 ./cluster-control.sh --join
-```
-
-### Cluster Verification
-
-This phase:
-- Waits until all nodes are in `Ready` state
-- Launches a temporary pod to test basic scheduling and networking
-- Deploys a DaemonSet to verify pod-to-pod connectivity between nodes
-- Checks CoreDNS availability and service resolution using a test pod
-
-Run:
-
-```bash
 ./cluster-control.sh --verify
 ```
 
----
+Each stage is independently rerunnable. Limit a safe operation to one host with
+an Ansible argument:
 
-## NFS Storage Setup
+```bash
+./cluster-control.sh --status --limit raspi-worker1
+```
 
-To enable dynamic Persistent Volume provisioning via NFS, this project supports setting up an NFS server on the master node with a USB-attached SSD.
+Run `./cluster-control.sh --help` for the complete command overview.
 
-### Step 1: Install and Configure NFS Server
+## Platform services
 
-Ensure the SSD is connected to `raspi-master` and identified (e.g., `/dev/sda1`). Then run:
+Deploy optional services after the base cluster is healthy:
 
 ```bash
 ./cluster-control.sh --nfs
-```
-
-This will:
-- Optionally format the disk (if `nfs_format_device: true`)
-- Mount it to `/mnt/nfs-ssd` with fstab persistence
-- Export it via `nfs-kernel-server` to all cluster nodes
-
-> ⚠️ You can control whether the disk is formatted using the variable `nfs_format_device` in `roles/nfs-server/defaults/main.yml`.
-
-### Step 2: Ensure NFS Client Tools are Installed
-
-The `common` role includes `nfs-common` to allow all nodes to mount NFS shares. If needed, you can reapply the common setup with:
-
-```bash
-./cluster-control.sh --prepare
-```
-
-This guarantees `nfs-common` is installed across the cluster.
-
-### Step 3: Verify NFS is Reachable from All Nodes
-
-Run the following to perform a read/write test from each node:
-
-```bash
 ./cluster-control.sh --verify-nfs
-```
-
-This creates a temporary mount, writes a test file, reads it back, and cleans up — ensuring that all nodes can access the NFS share correctly.
-
-### Step 4: Deploy the NFS Provisioner
-
-To enable dynamic PVC provisioning via Kubernetes, deploy the external provisioner:
-
-```bash
 ./cluster-control.sh --nfs-provisioner
-```
-
-This will:
-- Deploy the `nfs-subdir-external-provisioner` as a Deployment
-- Create the necessary RBAC rules
-- Register a `StorageClass` named `raspi-nfs-provisioner`
-
-The provisioner will mount the exported NFS volume (`/mnt/nfs-ssd`) and create subdirectories automatically for each PVC.
-
-### Step 5: Verify Dynamic PVC Provisioning
-
-After deploying the provisioner, the setup automatically:
-- Creates a temporary PVC using the `raspi-nfs-provisioner` class
-- Attaches it to a busybox Pod
-- Writes a test file inside the volume
-- Verifies the content
-- Cleans up both PVC and Pod
-
-You can also run this verification step again anytime:
-
-```bash
-./cluster-control.sh --nfs-provisioner
-```
-
-This ensures the entire storage pipeline — from NFS server to automatic PVCs — is functioning end-to-end.
-
----
-
-## Load Balancer Support with MetalLB
-
-To enable support for external `LoadBalancer` services within your on-premise Raspberry Pi Kubernetes cluster, this project includes a declarative setup for [MetalLB](https://metallb.universe.tf/).
-
-### Step 1: Deploy MetalLB
-
-MetalLB will be installed in native mode with custom IP address pool and L2 advertisement. Simply run:
-
-```bash
 ./cluster-control.sh --metallb
-```
-
-This will:
-
-- Apply the official MetalLB manifests
-- Wait for all MetalLB pods to become ready (`controller`, `speaker`, `webhook`)
-- Create an `IPAddressPool` with your configured address range (default: `192.168.0.240-192.168.0.250`)
-- Create a `L2Advertisement` to announce services at L2 level (ARP)
-- Verify MetalLB is operating correctly with a full echo-service test:
-  - A Pod running [`ealen/echo-server`](https://hub.docker.com/r/ealen/echo-server) is deployed
-  - A LoadBalancer service is exposed using MetalLB
-  - The host attempts a direct HTTP request to the external IP
-  - The response is validated and all resources are cleaned up
-
-### Customization
-
-You can change the IP range or namespace by editing:
-```yaml
-roles/metallb/defaults/main.yml
-```
-
-Example:
-```yaml
-metallb_address_pool:
-  name: default
-  addresses:
-    - 192.168.0.240-192.168.0.250
-```
-
-Ensure that the selected IP range is not used by your router's DHCP pool and is routable within your LAN.
-
----
-
-## Internal Container Registry
-
-This project includes a self-hosted container image registry that runs inside the Kubernetes cluster and is accessible both internally and (optionally) externally via MetalLB.
-
-### Step 1: Deploy the Registry
-
-Run:
-
-```bash
 ./cluster-control.sh --registry
-```
-
-This will:
-
-- Create a Deployment in the `kube-system` namespace using the official `registry:2` image
-- Expose it as a `ClusterIP` or `LoadBalancer` service (depending on configuration)
-- Optionally assign a static IP via MetalLB (e.g. `192.168.0.250`)
-- Perform a test from within the cluster using a BusyBox pod to ensure internal reachability
-- Perform a test from the control host using `curl` to ensure external access (if MetalLB is enabled)
-
-### Accessing the Registry
-
-#### From within the cluster
-Use the internal DNS name:
-```
-http://registry.kube-system.svc.cluster.local:5000
-```
-
-#### From your LAN (via MetalLB)
-If `registry_expose_lb: true` and `registry_lb_ip` are defined:
-```
-http://192.168.0.250:5000
-```
-Test externally with:
-```bash
-curl http://192.168.0.250:5000/v2/
-```
-Expected output:
-```
-{}
-```
-
-### Customization
-
-You can configure the registry settings in:
-```yaml
-roles/registry/defaults/main.yml
-```
-Example:
-```yaml
-registry_port: 5000
-registry_namespace: kube-system
-registry_expose_lb: true
-registry_lb_ip: 192.168.0.250
-```
-
-If you want persistence, modify the Deployment to use a PersistentVolumeClaim instead of `emptyDir`.
-
-### Security Note
-- By default, this registry is deployed **without authentication or TLS**.
-- It is intended for internal development use only.
-- If you plan to expose it beyond your LAN, secure it with a reverse proxy or use TLS + basic auth.
-
----
-
-## Monitoring Stack
-
-This project includes a lightweight monitoring stack based on Prometheus, Grafana, and exporters such as `node-exporter` and `kube-state-metrics`. The stack is fully integrated with Kubernetes and managed via Ansible.
-
-### Deployment
-
-To deploy the monitoring stack:
-
-```bash
 ./cluster-control.sh --monitoring
 ```
 
-This will:
+Important defaults:
 
-- Create the `monitoring` namespace (if missing).
-- Deploy Prometheus with:
-  - Kubernetes service discovery.
-  - Persistent volume (PVC).
-  - MetalLB LoadBalancer service.
-- Deploy `node-exporter` as a DaemonSet.
-- Deploy `kube-state-metrics`.
-- Deploy Grafana with:
-  - Prometheus as default datasource.
-  - Persistent storage.
-  - API-based dashboard provisioning.
+| Component | Default |
+| --- | --- |
+| NFS device | `/dev/sda1`; creation requires enablement and exact device confirmation |
+| NFS export | `/mnt/nfs-ssd` |
+| StorageClass | `raspi-nfs-provisioner` |
+| MetalLB pool | `192.168.0.240-192.168.0.250` |
+| Pod network | `10.244.0.0/16`, must not overlap the node LAN |
+| Service network | `10.96.0.0/12`, must not overlap node or pod networks |
+| Registry | persistent, internal `ClusterIP` |
+| Prometheus | 7-day retention, 10 GiB PVC |
+| Grafana | internal `ClusterIP`, generated admin password |
 
-### Accessing Grafana
+Pod and Service CIDRs are immutable installation decisions. The defaults above
+apply to new clusters; existing clusters keep their live values and must not be
+silently migrated.
 
-Grafana will be exposed at:
+Generated passwords, kubeconfig files, snapshots and reports are written below
+`config/.kube/outputs/`.
 
-```
-http://<grafana-loadbalancer-ip>:3000
-```
-
-Default credentials:
-
-- **Username:** `admin`
-- **Password:** `admin` (or as defined in `defaults/main.yml`)
-
-### Adding Dashboards by ID
-
-To customize which dashboards are imported into Grafana, edit this list in:
-
-```
-roles/grafana/defaults/main.yml
-```
-
-```yaml
-grafana_dashboards:
-  - id: 1860
-    name: node-exporter-full
-  - id: 13332
-    name: kube-state-metrics
-```
-
-You can find more dashboards at [grafana.com/dashboards](https://grafana.com/grafana/dashboards/).
-
-### Updating Dashboards
-
-To re-import dashboards:
+Access internal services without exposing them to the LAN:
 
 ```bash
-./cluster-control.sh --monitoring
+./cluster-control.sh kubectl --kubeconfig /home/ansible/.kube/config \
+  --namespace monitoring port-forward service/grafana 3000:3000
 ```
 
-This ensures dashboards are re-fetched and re-imported via Grafana’s API.
+The Grafana password is stored in
+`config/.kube/outputs/grafana-admin-password`.
 
-### Notes
+## Version policy
 
-- Dashboards are validated (must have `uid` and `title`).
-- `${DS_PROMETHEUS}` placeholders are auto-replaced with the correct datasource.
-- Uses the Grafana HTTP API — no need to mount dashboard JSON files.
+`platform_release_catalog` in
+`workdir/inventory/group_vars/all.yml` is the single source of truth for:
 
-> This monitoring setup is optimized for Raspberry Pi clusters: low memory footprint and declarative configuration.
+- Ubuntu install and supported release-upgrade hops
+- Kubernetes versions and Debian package revisions
+- containerd, runc and CNI plugins
+- Calico, MetalLB, monitoring, registry and validation images
+
+Fresh installs use the version validated by the repository. Existing clusters
+move through every supported Ubuntu release and every Kubernetes minor; minor
+versions are never skipped.
+
+The control image's default `kubectl` version mirrors the catalog and may be
+overridden for a staged operation:
+
+```bash
+KUBECTL_VERSION=v1.36.3 ./cluster-control.sh --build
+```
+
+## Upgrades
+
+Discovery tries the existing kubeconfig first and falls back to the static
+inventory. A bounded CIDR scan is available when explicitly requested:
+
+```bash
+./cluster-control.sh --discover-cluster
+./cluster-control.sh --discover-cluster \
+  --discovery-strategy scan \
+  --discovery-cidr 192.168.0.0/24
+```
+
+Always create and inspect a plan first:
+
+```bash
+./cluster-control.sh --upgrade-plan \
+  --target-version 1.36.3 \
+  --target-os-version 26.04
+```
+
+The automatic route also defaults to a non-mutating plan:
+
+```bash
+./cluster-control.sh --upgrade-latest-stable --dry-run
+```
+
+Apply only after reviewing the generated plan and snapshot:
+
+```bash
+./cluster-control.sh --upgrade-latest-stable --apply-upgrade
+```
+
+For separate maintenance windows:
+
+```bash
+./cluster-control.sh --upgrade-cluster \
+  --os-only \
+  --os-patch-nodes \
+  --apply-upgrade
+
+./cluster-control.sh --upgrade-cluster \
+  --kubernetes-only \
+  --target-version 1.36.3 \
+  --apply-upgrade
+```
+
+The preflight rejects unsupported version skips, unhealthy nodes, unsafe
+single-replica workloads and missing PodDisruptionBudgets unless an explicit
+override is supplied. Overrides such as `--allow-single-replica` and
+`--allow-no-pdb` reduce availability guarantees and should be exceptional.
+Drain also refuses unmanaged Pods by default; use
+`-- -e upgrade_force_drain=true` only after inspecting them. Ephemeral
+`emptyDir` data is deleted during an accepted drain.
+
+## Raspberry Pi policy
+
+The default node policy favors stability and flash lifetime:
+
+- volatile, bounded journald storage
+- APT autoclean, autoremove and cache cleanup
+- stale temporary-file cleanup
+- `fstrim.timer` where discard is supported
+- swap disabled
+- persisted Kubernetes networking modules and sysctls
+- no broad custom `iptables` accepts; active UFW trusts only `cluster_node_subnet`
+- kubelet system reservations, image garbage collection and log rotation
+- serial package and node upgrades
+- optional admin utilities disabled unless `common_install_admin_tools` is enabled
+
+Networking defaults to kube-proxy `iptables` and Calico `Iptables`. The nftables
+path is opt-in and both components must be changed together:
+
+```yaml
+kube_proxy_mode: "nftables"
+calico_linux_dataplane: "Nftables"
+```
+
+## Recovery status
+
+Worker re-provisioning and recovery artifact generation are available, but
+control-plane replacement remains experimental.
+
+Useful non-destructive preparation commands:
+
+```bash
+./cluster-control.sh --capture-recovery-bundle
+./cluster-control.sh --rehearse-master-recovery
+./cluster-control.sh --render-recovery-seeds
+```
+
+The macOS media helper verifies Ubuntu's published checksum and rejects disks
+that are internal, virtual, non-removable or not whole-disk devices:
+
+```bash
+./cluster-control.sh --list-removable-disks
+./cluster-control.sh --prepare-node-media --node raspi-worker1
+./cluster-control.sh --flash-node-media \
+  --node raspi-worker1 \
+  --device /dev/diskN \
+  --media-dry-run
+```
+
+Remove `--media-dry-run` only after checking the exact device. Flashing destroys
+all data on that device.
+
+Current control-plane recovery limitations:
+
+- a single control-plane node is an unavoidable API and etcd single point of
+  failure
+- the automated restore has not passed a complete replacement-media fire-drill
+- there is no automated serial-console capture for early boot failures
+
+A future accepted recovery design should include repeated physical fire-drills
+and preferably a three-node HA control plane or external replicated etcd.
+
+## Validation
+
+Run the same pre-commit gate as GitHub Actions:
+
+```bash
+./cluster-control.sh --validate
+```
+
+It runs:
+
+- Bash syntax and ShellCheck
+- Ruff lint and format checks
+- Python unit tests
+- `yamllint`
+- `ansible-lint` with the production profile
+- `ansible-playbook --syntax-check` for every playbook
+
+Build and validate against a clean toolchain in one invocation:
+
+```bash
+./cluster-control.sh --build --validate
+```
+
+The CI workflow uses read-only permissions, immutable action SHAs and the same
+pinned control image. Dependabot checks Actions, Docker and Python dependencies
+weekly; platform catalog updates still require an explicit validation change.
+
+## Repository layout
+
+```text
+.
+├── cluster-control.sh              # user-facing entrypoint
+├── config/                         # ignored runtime secrets and outputs
+├── tests/                          # unit and policy tests
+├── tools/                          # host-side media and validation tools
+└── workdir/
+    ├── inventory/                  # static and dynamic inventory
+    ├── playbooks/                  # lifecycle entrypoints
+    ├── roles/                      # reusable Ansible implementation
+    ├── tools/                      # upgrade planning and reporting
+    └── requirements*.{txt,yml}     # pinned control dependencies
+```
+
+## Operational limits
+
+- This is a single-control-plane design, not HA.
+- NFS hosted on that node is also a storage single point of failure.
+- The project does not back up application-level data inside persistent
+  volumes.
+- Passwordless sudo is enabled for the managed admin user by default. Disable
+  `admin_passwordless_sudo` only after providing another non-interactive Ansible
+  privilege-escalation strategy.
+- `--shutdown` targets every inventory node and is intentionally disruptive.
+
+## Future work
+
+| Priority | Improvement | Acceptance criterion |
+| --- | --- | --- |
+| P0 | Accept control-plane recovery and move to three control-plane nodes or replicated external etcd | Three consecutive replacement-media fire-drills restore a healthy cluster without using the original system disk |
+| P0 | Protect persistent application data and etcd independently of the cluster | Scheduled, encrypted backups pass automated restore tests on disposable storage |
+| P1 | Remove the NFS single point of failure | Storage survives loss of one node or disk and workloads recover within a documented objective |
+| P1 | Migrate clusters created with overlapping Pod and LAN CIDRs | Preflight reports overlap and a rehearsed rebuild or migration runbook preserves required data |
+| P1 | Pin workload images by multi-architecture digest and hash Python artifacts | CI verifies digests, hashes, SBOM generation and supported ARM64 manifests |
+| P2 | Remove the temporary `var-naming` lint exclusion | Shared variables are namespaced and the production lint profile passes without skips |
+| P2 | Replace SSH trust-on-first-use and passwordless sudo defaults | Host keys are provisioned from a trusted source and unattended privilege escalation uses a scoped secret |
+| P2 | Add scheduled hardware integration testing | A dedicated Raspberry Pi environment validates bootstrap, upgrade, reboot and rollback paths |
+| P2 | Choose and add an explicit project license | Repository redistribution terms are documented in a root `LICENSE` file |
+
+Upstream references:
+
+- [kubeadm cluster upgrades](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-upgrade/)
+- [Kubernetes version skew policy](https://kubernetes.io/releases/version-skew-policy/)
+- [Ansible roles](https://docs.ansible.com/projects/ansible-core/devel/playbook_guide/playbooks_reuse_roles.html)
+- [Ubuntu Server on Raspberry Pi](https://documentation.ubuntu.com/hardware-support/boards/how-to/ubuntu_supported/raspberry-pi/)

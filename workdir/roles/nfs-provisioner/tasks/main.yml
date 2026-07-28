@@ -1,6 +1,0 @@
----
-- name: Deploy NFS provisioner components
-  import_tasks: create.yml
-
-- name: Verify dynamic PVC provisioning
-  import_tasks: verify.yml

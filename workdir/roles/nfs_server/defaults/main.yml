@@ -1,0 +1,13 @@
+---
+nfs_export_device: "/dev/sda1"
+nfs_export_mount: "/mnt/nfs-ssd"
+nfs_export_label: "nfs-volume"
+nfs_clients_subnet: "192.168.0.0/24"
+nfs_format_device: false
+nfs_format_confirm_device: ""
+nfs_verify_enabled: true
+nfs_mount_options: "defaults,noatime"
+
+nfs_export_owner: "nobody"
+nfs_export_group: "nogroup"
+nfs_export_mode: "0775"

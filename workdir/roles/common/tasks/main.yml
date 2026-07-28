@@ -1,9 +1,16 @@
 ---
+- name: Ensure APT repositories are healthy
+  ansible.builtin.include_role:
+    name: apt_resilience
+
 - name: Include update tasks
-  import_tasks: update.yml
+  ansible.builtin.import_tasks: update.yml
 
 - name: Include swap disabling tasks
-  import_tasks: swap.yml
+  ansible.builtin.import_tasks: swap.yml
 
 - name: Include tools installation tasks
-  import_tasks: tools.yml
+  ansible.builtin.import_tasks: tools.yml
+
+- name: Include housekeeping tasks
+  ansible.builtin.import_tasks: housekeeping.yml

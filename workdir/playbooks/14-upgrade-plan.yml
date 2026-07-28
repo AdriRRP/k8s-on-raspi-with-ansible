@@ -1,0 +1,8 @@
+---
+- name: Build upgrade plan for an existing cluster
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - role: cluster_preflight
+    - role: k8s_upgrade_preflight

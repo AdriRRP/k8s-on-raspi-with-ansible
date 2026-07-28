@@ -1,0 +1,100 @@
+---
+- name: Deploy kube-state-metrics Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'ksm-deployment.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy kube-state-metrics Service
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'ksm-service.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Wait until kube-state-metrics pod is ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ monitoring_namespace }}"
+    label_selectors:
+      - app=kube-state-metrics
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: ksm_pods
+  retries: 12
+  delay: 5
+  until:
+    - ksm_pods.resources | length > 0
+    - ksm_pods.resources[0].status.phase == "Running"
+    - ksm_pods.resources[0].status.containerStatuses is defined
+    - ksm_pods.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length == 1
+  changed_when: false
+
+- name: Ensure previous kube-state-metrics smoke pod is absent
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: ksm-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create kube-state-metrics smoke pod
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: ksm-smoke
+        namespace: "{{ monitoring_namespace }}"
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: smoke
+            image: "{{ platform_smoke_test_image }}"
+            command: ["sh", "-c", "sleep 300"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait until kube-state-metrics smoke pod is ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: ksm-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: ksm_smoke_pod
+  retries: 12
+  delay: 5
+  until:
+    - ksm_smoke_pod.resources | length > 0
+    - ksm_smoke_pod.resources[0].status.phase == "Running"
+    - ksm_smoke_pod.resources[0].status.containerStatuses is defined
+    - ksm_smoke_pod.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length == 1
+  delegate_to: localhost
+
+- name: Wait until Prometheus sees kube-state-metrics as UP
+  ansible.builtin.shell: >
+    kubectl exec -n {{ monitoring_namespace }} ksm-smoke --kubeconfig={{ kubeconfig_local_path }} --
+    wget -qO- "http://prometheus.{{ monitoring_namespace }}.svc.cluster.local:9090/api/v1/query?query=up{job='kube-state-metrics'}"
+  register: ksm_up
+  retries: 5
+  delay: 10
+  until: '"\"1\"" in ksm_up.stdout or "1]" in ksm_up.stdout'
+  changed_when: false
+  delegate_to: localhost
+
+- name: Remove kube-state-metrics smoke pod
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: ksm-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Confirm Prometheus is scraping kube-state-metrics successfully
+  ansible.builtin.debug:
+    msg: "Prometheus is scraping kube-state-metrics successfully."

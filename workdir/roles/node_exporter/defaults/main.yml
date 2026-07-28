@@ -1,0 +1,4 @@
+---
+monitoring_namespace: monitoring
+kubeconfig_local_path: /home/ansible/.kube/config
+node_exporter_image: "{{ platform_release_catalog.observability.node_exporter_image }}"

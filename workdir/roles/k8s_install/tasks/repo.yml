@@ -1,0 +1,44 @@
+---
+- name: Ensure /etc/apt/keyrings exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Install deb822 repository support
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+  become: true
+
+- name: Remove legacy Kubernetes repository artifacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    - /etc/apt/sources.list.d/kubernetes.list
+  become: true
+
+- name: Download Kubernetes repository signing key
+  ansible.builtin.get_url:
+    url: "{{ kubernetes_apt_key_url }}"
+    dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Add Kubernetes APT repository
+  ansible.builtin.deb822_repository:
+    name: kubernetes
+    types:
+      - deb
+    uris:
+      - "{{ kubernetes_apt_repo_url }}"
+    suites:
+      - /
+    signed_by: /etc/apt/keyrings/kubernetes-apt-keyring.asc
+    state: present
+  become: true

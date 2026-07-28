@@ -4,4 +4,5 @@
   gather_facts: false
 
   roles:
-    - role: nfs-provisioner
+    - role: cluster_preflight
+    - role: nfs_provisioner

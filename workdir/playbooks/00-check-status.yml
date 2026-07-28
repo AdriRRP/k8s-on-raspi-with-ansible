@@ -1,4 +1,4 @@
-
+---
 - name: Check status and gather system information from all nodes
   hosts: cluster
   gather_facts: true

@@ -1,0 +1,108 @@
+---
+- name: Deploy node-exporter DaemonSet
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'node-exporter-daemonset.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy node-exporter Service
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'node-exporter-service.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Wait until all node-exporter pods are in Running phase
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: "{{ monitoring_namespace }}"
+    label_selectors:
+      - app=node-exporter
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: node_exporter_pods
+  retries: 10
+  delay: 10
+  until:
+    - node_exporter_pods.resources | length > 0
+    - >
+      node_exporter_pods.resources
+      | map(attribute='status.phase')
+      | select('equalto', 'Running')
+      | list
+      | length
+      == (node_exporter_pods.resources | length)
+  changed_when: false
+
+- name: Confirm node-exporter is deployed and ready
+  ansible.builtin.debug:
+    msg: "node-exporter is running on {{ node_exporter_pods.resources | length }} node(s)."
+
+- name: Ensure previous node-exporter smoke pod is absent
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: node-exporter-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create node-exporter smoke pod
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: node-exporter-smoke
+        namespace: "{{ monitoring_namespace }}"
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: smoke
+            image: "{{ platform_smoke_test_image }}"
+            command: ["sh", "-c", "sleep 300"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait until node-exporter smoke pod is ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: node-exporter-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: node_exporter_smoke_pod
+  retries: 12
+  delay: 5
+  until:
+    - node_exporter_smoke_pod.resources | length > 0
+    - node_exporter_smoke_pod.resources[0].status.phase == "Running"
+    - node_exporter_smoke_pod.resources[0].status.containerStatuses is defined
+    - node_exporter_smoke_pod.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length == 1
+  changed_when: false
+  delegate_to: localhost
+
+- name: Wait until Prometheus API returns node-exporter metrics
+  ansible.builtin.shell: >
+    kubectl exec -n {{ monitoring_namespace }} node-exporter-smoke --kubeconfig={{ kubeconfig_local_path }} --
+    wget -qO- "http://prometheus.{{ monitoring_namespace }}.svc.cluster.local:9090/api/v1/query?query=node_cpu_seconds_total"
+  register: node_exporter_metrics
+  retries: 5
+  delay: 10
+  until: "'node_cpu_seconds_total' in node_exporter_metrics.stdout"
+  changed_when: false
+  delegate_to: localhost
+
+- name: Remove node-exporter smoke pod
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: node-exporter-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Confirm Prometheus is collecting node-exporter metrics
+  ansible.builtin.debug:
+    msg: "Prometheus is scraping node-exporter metrics successfully."

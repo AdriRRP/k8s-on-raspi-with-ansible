@@ -1,2 +1,0 @@
-monitoring_namespace: monitoring
-kubeconfig_local_path: /home/ansible/.kube/config

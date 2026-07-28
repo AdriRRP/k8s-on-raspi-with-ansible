@@ -1,0 +1,97 @@
+---
+- name: Define connectivity DaemonSet identity
+  ansible.builtin.set_fact:
+    connectivity_daemonset_name: connectivity-daemonset-test
+    connectivity_daemonset_label: connectivity-daemonset-test
+
+- name: Run inter-node connectivity verification
+  block:
+    - name: Deploy DaemonSet for inter-node connectivity test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: "{{ connectivity_daemonset_name }}"
+            namespace: default
+            labels:
+              app: "{{ connectivity_daemonset_label }}"
+          spec:
+            selector:
+              matchLabels:
+                app: "{{ connectivity_daemonset_label }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ connectivity_daemonset_label }}"
+              spec:
+                containers:
+                  - name: test
+                    image: "{{ platform_smoke_test_image }}"
+                    command: ["sh", "-c", "sleep 3600"]
+                    imagePullPolicy: IfNotPresent
+      register: connectivity_test_ds
+      failed_when: connectivity_test_ds.failed is defined and connectivity_test_ds.failed
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Get number of Ready nodes
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get nodes --no-headers --kubeconfig={{ kubeconfig_local_path }} | grep -c ' Ready'
+      register: expected_pods
+      changed_when: false
+      delegate_to: localhost
+      args:
+        executable: /bin/bash
+
+    - name: Wait for DaemonSet pods to be Ready
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl get pods -l app={{ connectivity_daemonset_label }} -o json --kubeconfig={{ kubeconfig_local_path }} \
+        | jq '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length'
+      register: ready_pods
+      retries: 20
+      delay: 5
+      until: ready_pods.stdout | int == expected_pods.stdout | int
+      changed_when: false
+      delegate_to: localhost
+      args:
+        executable: /bin/bash
+
+    - name: Get list of pods and their IPs
+      ansible.builtin.shell: |
+        kubectl get pods -l app={{ connectivity_daemonset_label }} -o json --kubeconfig={{ kubeconfig_local_path }}
+      register: pod_ips
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Parse pod name and IPs into list
+      ansible.builtin.set_fact:
+        pod_info: >-
+          {{
+            pod_ips.stdout | from_json | json_query('items[].{name: metadata.name, ip: status.podIP}')
+          }}
+
+    - name: Check inter-node connectivity from each pod
+      ansible.builtin.shell: |
+        kubectl exec -n default {{ item.0.name }} --kubeconfig={{ kubeconfig_local_path }} -- ping -c 3 -W 2 {{ item.1.ip }}
+      loop: "{{ pod_info | product(pod_info) | list }}"
+      loop_control:
+        label: "Ping from {{ item.0.name }} to {{ item.1.name }}"
+      when: item.0.name != item.1.name
+      changed_when: false
+      register: ping_checks
+      delegate_to: localhost
+  always:
+    - name: Cleanup DaemonSet
+      kubernetes.core.k8s:
+        state: absent
+        kind: DaemonSet
+        name: "{{ connectivity_daemonset_name }}"
+        namespace: default
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      failed_when: false
+      changed_when: false
+      delegate_to: localhost

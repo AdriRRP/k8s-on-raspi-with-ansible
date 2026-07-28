@@ -1,0 +1,4 @@
+---
+kubeconfig_local_path: /home/ansible/.kube/config
+verify_timeout: 300
+verify_interval: 10

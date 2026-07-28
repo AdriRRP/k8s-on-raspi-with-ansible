@@ -1,6 +1,8 @@
+---
 - name: Deploy MetalLB load balancer
   hosts: localhost
   gather_facts: false
 
   roles:
+    - role: cluster_preflight
     - metallb

@@ -1,6 +1,25 @@
 ---
 - name: Update apt cache and upgrade packages
   ansible.builtin.apt:
-    update_cache: yes
+    update_cache: true
     upgrade: dist
+  tags: update
+
+- name: Remove obsolete packages after upgrade
+  ansible.builtin.apt:
+    autoremove: true
+    purge: "{{ common_apt_autoremove_purge }}"
+  when: common_apt_autoremove_enabled | bool
+  tags: update
+
+- name: Autoclean cached packages after upgrade
+  ansible.builtin.apt:
+    autoclean: true
+  when: common_apt_autoclean_enabled | bool
+  tags: update
+
+- name: Remove downloaded package archives after upgrade
+  ansible.builtin.apt:
+    clean: true
+  when: common_apt_clean_enabled | bool
   tags: update

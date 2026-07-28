@@ -1,8 +1,8 @@
 # ===========================
 # Config - Sensitive or generated
 # ===========================
-config/**/*
-!config/README.md   # Keep documentation files if needed
+config/*
+!config/README.md
 
 # ===========================
 # Ansible artifacts
@@ -38,6 +38,7 @@ ansible/__pycache__/
 __pycache__/
 *.pyc
 *.pyo
+.ruff_cache/
 
 # ===========================
 # Docker artifacts (optional cache, images)

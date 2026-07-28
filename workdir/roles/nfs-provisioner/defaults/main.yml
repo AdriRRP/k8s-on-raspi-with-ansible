@@ -1,7 +1,0 @@
-nfs_namespace: nfs-storage
-nfs_provisioner_name: nfs-subdir-external-provisioner
-nfs_server: "192.168.0.100"
-nfs_path: "/mnt/nfs-ssd"
-storage_class_name: "raspi-nfs-provisioner"
-kubeconfig_local_path: /home/ansible/.kube/config
-set_storageclass_default: true

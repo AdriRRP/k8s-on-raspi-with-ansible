@@ -1,0 +1,41 @@
+---
+- name: Recover a reflashed worker and rejoin it to the cluster
+  hosts: workers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Ensure local SSH directory exists before worker recovery
+      ansible.builtin.file:
+        path: /home/ansible/.ssh
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Remove stale known_hosts entries for the replacement worker
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -R
+          - "{{ item }}"
+          - -f
+          - "{{ recovery_known_hosts_path }}"
+      loop:
+        - "{{ inventory_hostname }}"
+        - "{{ ansible_host | default(inventory_hostname) }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      failed_when: false
+
+  roles:
+    - role: common
+    - role: user_management
+    - role: hostname
+    - role: hostsfile
+    - role: k8s_prereq
+    - role: containerd
+    - role: k8s_install
+    - role: node_recovery_cleanup
+    - role: k8s_join

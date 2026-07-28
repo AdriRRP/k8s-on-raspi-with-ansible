@@ -9,4 +9,4 @@
 
   tasks:
     - name: Run NFS verification tasks
-      import_tasks: ../roles/nfs-server/tasks/verify.yml
+      ansible.builtin.import_tasks: ../roles/nfs_server/tasks/verify.yml

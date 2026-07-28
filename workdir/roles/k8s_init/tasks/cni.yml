@@ -1,0 +1,85 @@
+---
+- name: Check whether the Calico Installation resource already exists
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - installation.operator.tigera.io
+      - default
+      - "--kubeconfig={{ k8s_init_apply_kubeconfig_path }}"
+  register: k8s_init_existing_calico_installation
+  changed_when: false
+  failed_when: false
+
+- name: Download Tigera operator manifest
+  ansible.builtin.get_url:
+    url: "{{ calico_tigera_url }}"
+    dest: /tmp/tigera-operator.yaml
+    checksum: "sha256:{{ calico_tigera_checksum }}"
+    mode: '0644'
+
+- name: Apply Tigera operator manifest (server-side apply with conflict resolution)
+  ansible.builtin.command: >
+    kubectl apply --server-side --force-conflicts -f /tmp/tigera-operator.yaml --kubeconfig={{ k8s_init_apply_kubeconfig_path }}
+  register: tigera_apply_result
+  changed_when: "'configured' in tigera_apply_result.stdout or 'created' in tigera_apply_result.stdout"
+  failed_when: tigera_apply_result.rc != 0
+
+- name: Download Calico custom resources
+  ansible.builtin.get_url:
+    url: "{{ calico_crds_url }}"
+    dest: /tmp/custom-resources.yaml
+    checksum: "sha256:{{ calico_custom_resources_checksum }}"
+    mode: '0644'
+  when: k8s_init_existing_calico_installation.rc != 0
+
+- name: Wait for Calico CRDs to be registered before applying custom resources
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - get
+      - crd
+      - "{{ item }}"
+      - "--kubeconfig={{ k8s_init_apply_kubeconfig_path }}"
+  register: calico_required_crd_result
+  changed_when: false
+  retries: 24
+  delay: 5
+  until: calico_required_crd_result.rc == 0
+  loop: "{{ calico_required_crds }}"
+
+- name: Update Calico IP pool CIDR in custom resources
+  ansible.builtin.replace:
+    path: /tmp/custom-resources.yaml
+    regexp: 'cidr: .*'
+    replace: "cidr: {{ pod_network_cidr }}"
+  when:
+    - k8s_init_existing_calico_installation.rc != 0
+    - pod_network_cidr is defined
+
+- name: Apply Calico custom resources (server-side)
+  ansible.builtin.command: >
+    kubectl apply --server-side --force-conflicts -f /tmp/custom-resources.yaml --kubeconfig={{ k8s_init_apply_kubeconfig_path }}
+  register: calico_cr_apply_result
+  changed_when: "'configured' in calico_cr_apply_result.stdout or 'created' in calico_cr_apply_result.stdout"
+  failed_when: calico_cr_apply_result.rc != 0
+  when: k8s_init_existing_calico_installation.rc != 0
+
+- name: Switch Calico dataplane when explicitly requested
+  ansible.builtin.command: >
+    kubectl patch installation.operator.tigera.io default
+    --type merge
+    --patch '{"spec":{"calicoNetwork":{"linuxDataplane":"{{ calico_linux_dataplane }}"}}}'
+    --kubeconfig={{ k8s_init_apply_kubeconfig_path }}
+  when: calico_linux_dataplane != 'Iptables'
+  register: calico_dataplane_patch_result
+  changed_when: "'patched' in calico_dataplane_patch_result.stdout"
+  failed_when: calico_dataplane_patch_result.rc != 0
+
+- name: Remove temporary Calico manifests
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tigera-operator.yaml
+    - /tmp/custom-resources.yaml

@@ -1,0 +1,15 @@
+---
+- name: Include prerequisite checks
+  ansible.builtin.import_tasks: check.yml
+
+- name: Include UFW configuration tasks
+  ansible.builtin.import_tasks: ufw.yml
+
+- name: Include iptables configuration tasks
+  ansible.builtin.import_tasks: iptables.yml
+
+- name: Include sysctl forwarding tasks
+  ansible.builtin.import_tasks: sysctl-forwarding.yml
+
+- name: Include prerequisite validation tasks
+  ansible.builtin.import_tasks: validate.yml

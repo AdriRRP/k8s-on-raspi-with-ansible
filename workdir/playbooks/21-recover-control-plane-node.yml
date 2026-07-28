@@ -1,0 +1,44 @@
+---
+- name: Recover a reflashed control-plane node from a captured bundle
+  hosts: master
+  become: true
+  gather_facts: true
+  serial: 1
+
+  pre_tasks:
+    - name: Ensure local SSH directory exists before master recovery
+      ansible.builtin.file:
+        path: /home/ansible/.ssh
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Remove stale known_hosts entries for the replacement control-plane node
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -R
+          - "{{ item }}"
+          - -f
+          - "{{ recovery_known_hosts_path }}"
+      loop:
+        - "{{ inventory_hostname }}"
+        - "{{ ansible_host | default(inventory_hostname) }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      failed_when: false
+
+  roles:
+    - role: common
+    - role: user_management
+    - role: hostname
+    - role: hostsfile
+    - role: k8s_prereq
+    - role: containerd
+    - role: k8s_install
+    - role: control_plane_recovery_restore
+      vars:
+        control_plane_restore_mode: apply
+        control_plane_restore_confirm_destructive: true

@@ -1,15 +1,16 @@
+---
 - name: Check if external IP is configured
-  assert:
+  ansible.builtin.assert:
     that:
-      - registry_expose_lb
-      - registry_lb_ip is defined
+      - registry_service_type == "LoadBalancer"
+      - registry_lb_ip | length > 0
     fail_msg: >
       External registry verification skipped: either MetalLB is disabled
       or no loadBalancer IP is defined.
     success_msg: "MetalLB external IP correctly configured: {{ registry_lb_ip }}"
 
 - name: Wait for registry to be reachable at {{ registry_lb_ip }}
-  uri:
+  ansible.builtin.uri:
     url: "http://{{ registry_lb_ip }}:{{ registry_port }}/v2/"
     method: GET
     return_content: true
@@ -21,10 +22,10 @@
   delegate_to: localhost
 
 - name: Verify response from external registry
-  fail:
+  ansible.builtin.fail:
     msg: "Unexpected response from external registry at {{ registry_lb_ip }}"
   when: "'{}' not in external_response.content"
 
 - name: Debug external registry test
-  debug:
+  ansible.builtin.debug:
     msg: "Registry reachable from control host at http://{{ registry_lb_ip }}:{{ registry_port }}/v2/"

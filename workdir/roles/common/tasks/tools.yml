@@ -1,22 +1,13 @@
 ---
 - name: Install base system tools
   ansible.builtin.apt:
-    name:
-      - curl
-      - git
-      - vim
-      - tmux
-      - htop
-      - net-tools
-      - python3-pip
-      - gnupg
-      - lsb-release
-      - apt-transport-https
-      - ca-certificates
-      - software-properties-common
-      - tree
-      - nfs-common
-      - bat
-      - bat
+    name: "{{ common_required_packages }}"
     state: present
+  tags: tools
+
+- name: Install optional administration tools
+  ansible.builtin.apt:
+    name: "{{ common_admin_packages }}"
+    state: present
+  when: common_install_admin_tools | bool
   tags: tools

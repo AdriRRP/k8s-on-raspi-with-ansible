@@ -1,0 +1,9 @@
+---
+- name: Basic Kubernetes health check
+  ansible.builtin.import_tasks: basic-check.yml
+
+- name: Inter-node network connectivity test
+  ansible.builtin.import_tasks: network-check.yml
+
+- name: CoreDNS service test
+  ansible.builtin.import_tasks: coredns.yml

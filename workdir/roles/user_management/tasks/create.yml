@@ -1,0 +1,34 @@
+---
+- name: Ensure admin user exists
+  ansible.builtin.user:
+    name: "{{ cluster_admin_user }}"
+    groups: sudo
+    shell: /bin/bash
+    state: present
+    create_home: true
+  tags: user
+
+- name: Authorize control host SSH public key for admin
+  ansible.posix.authorized_key:
+    user: "{{ cluster_admin_user }}"
+    key: "{{ lookup('file', '/home/ansible/.ssh/id_ed25519.pub') }}"
+    state: present
+    manage_dir: true
+  tags: ssh
+
+- name: Allow admin to use sudo without password when explicitly enabled
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ cluster_admin_user }}"
+    content: "{{ cluster_admin_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    owner: root
+    group: root
+    mode: '0440'
+  when: admin_passwordless_sudo | bool
+  tags: sudo
+
+- name: Remove passwordless sudo when disabled
+  ansible.builtin.file:
+    path: "/etc/sudoers.d/{{ cluster_admin_user }}"
+    state: absent
+  when: not admin_passwordless_sudo | bool
+  tags: sudo

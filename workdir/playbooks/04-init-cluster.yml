@@ -1,8 +1,8 @@
 ---
 - name: Initialize Kubernetes control plane
-  hosts: raspi-master
+  hosts: master
   become: true
   gather_facts: true
 
   roles:
-    - k8s-init
+    - k8s_init

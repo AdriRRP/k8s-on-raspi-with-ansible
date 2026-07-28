@@ -1,3 +1,4 @@
+---
 - name: Deploy echo-server pod
   kubernetes.core.k8s:
     state: present
@@ -10,11 +11,30 @@
         labels:
           app: echo-server
       spec:
+        automountServiceAccountToken: false
+        securityContext:
+          seccompProfile:
+            type: RuntimeDefault
         containers:
           - name: echo
-            image: ealen/echo-server
+            image: "{{ platform_smoke_test_image }}"
+            command:
+              - httpd
+              - -f
+              - -p
+              - "8080"
+              - -h
+              - /etc
             ports:
-              - containerPort: 80
+              - containerPort: 8080
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65534
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
@@ -45,12 +65,12 @@
           app: echo-server
         ports:
           - port: 80
-            targetPort: 80
+            targetPort: 8080
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
 - name: Wait for external IP to be assigned
-  shell: |
+  ansible.builtin.shell: |
     kubectl --kubeconfig={{ kubeconfig_local_path }} get svc echo-service -n default \
       -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
   register: echo_service_ip
@@ -61,20 +81,79 @@
   delegate_to: localhost
 
 - name: Wait until echo-service is reachable via MetalLB IP
-  uri:
-    url: "http://{{ echo_service_ip.stdout }}"
-    method: GET
-    return_content: true
-    status_code: 200
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: metallb-reachability-probe
+        namespace: default
+        labels:
+          app: metallb-reachability-probe
+      spec:
+        automountServiceAccountToken: false
+        hostNetwork: true
+        dnsPolicy: ClusterFirstWithHostNet
+        restartPolicy: Always
+        securityContext:
+          seccompProfile:
+            type: RuntimeDefault
+        containers:
+          - name: probe
+            image: "{{ platform_smoke_test_image }}"
+            command:
+              - sh
+              - -c
+              - sleep 3600
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                  - ALL
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+              runAsUser: 65534
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for host-network reachability probe pod to be Running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: default
+    name: metallb-reachability-probe
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: metallb_reachability_probe
+  until: >-
+    metallb_reachability_probe.resources | length > 0
+    and metallb_reachability_probe.resources[0].status.phase == "Running"
+  retries: 10
+  delay: 6
+  delegate_to: localhost
+
+- name: Wait until echo-service is reachable via MetalLB IP from node network
+  ansible.builtin.command: >
+    kubectl exec -n default metallb-reachability-probe --kubeconfig={{ kubeconfig_local_path }} --
+    wget -qO- --timeout=5 http://{{ echo_service_ip.stdout }}
   register: echo_response
+  changed_when: false
   retries: 10
   delay: 5
-  until: echo_response.status == 200
+  until: echo_response.rc == 0
   delegate_to: localhost
 
 - name: Debug echo response
-  debug:
-    msg: "MetalLB test successful: echo service responded from {{ echo_service_ip.stdout }}"
+  ansible.builtin.debug:
+    msg: "MetalLB test successful from node network: echo service responded from {{ echo_service_ip.stdout }}"
+
+- name: Clean up reachability probe pod
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    name: metallb-reachability-probe
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
 
 - name: Clean up test pod
   kubernetes.core.k8s:

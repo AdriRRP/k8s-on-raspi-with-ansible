@@ -1,0 +1,7 @@
+---
+- name: Verify recovered cluster state end to end
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - role: cluster_recovery_verify

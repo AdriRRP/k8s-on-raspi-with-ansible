@@ -1,0 +1,39 @@
+{% set recovery_seed_authorized_key = lookup('ansible.builtin.file', recovery_seed_ssh_public_key_path) | trim %}
+{% set recovery_seed_bootstrap_matches_admin = recovery_seed_bootstrap_user == cluster_admin_user %}
+#cloud-config
+hostname: {{ inventory_hostname }}
+create_hostname_file: true
+manage_etc_hosts: true
+ssh_pwauth: false
+
+users:
+  - default
+{% if not recovery_seed_bootstrap_matches_admin %}
+  - name: {{ recovery_seed_bootstrap_user }}
+    gecos: Recovery Bootstrap User
+    shell: /bin/bash
+    groups: [{{ recovery_seed_bootstrap_user_groups | join(', ') }}]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{ recovery_seed_authorized_key }}
+{% endif %}
+  - name: {{ cluster_admin_user }}
+    gecos: Kubernetes Cluster Admin
+    shell: /bin/bash
+    groups: [adm, sudo]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{ recovery_seed_authorized_key }}
+
+package_update: {{ recovery_seed_cloud_init_package_update | bool | to_json }}
+package_upgrade: false
+
+write_files:
+  - path: /etc/cloud/cloud.cfg.d/99-recovery-default-user.cfg
+    permissions: "0644"
+    content: |
+      system_info:
+        default_user:
+          name: {{ recovery_seed_bootstrap_user }}

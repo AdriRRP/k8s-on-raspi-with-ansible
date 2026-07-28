@@ -5,44 +5,110 @@
     definition: "{{ lookup('template', 'grafana-configmap-ini.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
 
-- name: Deploy Grafana PVC
+- name: Remove existing Grafana deployment before forced state reset
   kubernetes.core.k8s:
-    state: present
-    definition: "{{ lookup('template', 'grafana-pvc.yml.j2') | from_yaml }}"
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    name: grafana
+    namespace: "{{ monitoring_namespace }}"
+    wait: true
     kubeconfig: "{{ kubeconfig_local_path }}"
+  when: grafana_force_reset_persistent_state | bool
 
-- name: Deploy Grafana Deployment
+- name: Remove existing Grafana PVC before forced state reset
   kubernetes.core.k8s:
-    state: present
-    definition: "{{ lookup('template', 'grafana-deployment.yml.j2') | from_yaml }}"
+    state: absent
+    api_version: v1
+    kind: PersistentVolumeClaim
+    name: grafana-pvc
+    namespace: "{{ monitoring_namespace }}"
+    wait: true
     kubeconfig: "{{ kubeconfig_local_path }}"
+  when: grafana_force_reset_persistent_state | bool
 
-- name: Deploy Grafana Service
-  kubernetes.core.k8s:
-    state: present
-    definition: "{{ lookup('template', 'grafana-service.yml.j2') | from_yaml }}"
-    kubeconfig: "{{ kubeconfig_local_path }}"
+- name: Deploy Grafana and validate runtime health
+  block:
+    - name: Apply Grafana runtime resources
+      ansible.builtin.import_tasks: deploy_runtime.yml
+  rescue:
+    - name: Query Grafana pods after failed rollout
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+        label_selectors:
+          - app=grafana
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      register: grafana_failed_pods
+      delegate_to: localhost
 
-- name: Get Grafana LoadBalancer IP
-  shell: >
-    kubectl get svc -n {{ monitoring_namespace }} grafana
-    -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-    --kubeconfig={{ kubeconfig_local_path }}
-  register: grafana_ip
-  changed_when: false
+    - name: Capture Grafana failed pod name
+      ansible.builtin.set_fact:
+        grafana_failed_pod_name: >-
+          {{
+            (
+              grafana_failed_pods.resources | default([])
+              | sort(attribute='metadata.creationTimestamp')
+              | map(attribute='metadata.name')
+              | list
+              | last
+            ) | default('')
+          }}
+      delegate_to: localhost
 
-- name: Wait for Grafana to be ready
-  uri:
-    url: "http://{{ grafana_ip.stdout }}:3000/api/health"
-    method: GET
-    status_code: 200
-  register: grafana_ready
-  retries: 10
-  delay: 5
-  until: grafana_ready.status == 200
-  changed_when: false
+    - name: Capture Grafana logs from failed rollout
+      ansible.builtin.shell: >
+        kubectl logs -n {{ monitoring_namespace }} {{ grafana_failed_pod_name }}
+        --kubeconfig={{ kubeconfig_local_path }}
+        --tail=200
+      register: grafana_failed_logs
+      changed_when: false
+      failed_when: false
+      when: grafana_failed_pod_name | length > 0
+      delegate_to: localhost
 
-- name: Show Grafana URL
-  ansible.builtin.debug:
-    msg: "Grafana is available at http://{{ grafana_ip.stdout }}:3000 (user: {{ grafana_admin_user }})"
+    - name: Evaluate Grafana auto-reset eligibility
+      ansible.builtin.set_fact:
+        grafana_can_auto_reset_state: >-
+          {{
+            grafana_auto_reset_persistent_state_on_provisioning_failure | bool
+            and grafana_failed_logs.stdout is defined
+            and grafana_provisioning_failure_log_pattern in grafana_failed_logs.stdout
+          }}
+      delegate_to: localhost
 
+    - name: Remove existing Grafana deployment before auto-reset retry
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: grafana
+        namespace: "{{ monitoring_namespace }}"
+        wait: true
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      when: grafana_can_auto_reset_state | bool
+
+    - name: Remove existing Grafana PVC before auto-reset retry
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: grafana-pvc
+        namespace: "{{ monitoring_namespace }}"
+        wait: true
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      when: grafana_can_auto_reset_state | bool
+
+    - name: Retry Grafana deployment after persistent state reset
+      ansible.builtin.import_tasks: deploy_runtime.yml
+      when: grafana_can_auto_reset_state | bool
+
+    - name: Abort when Grafana rollout cannot be auto-recovered safely
+      ansible.builtin.fail:
+        msg: >-
+          Grafana failed after upgrade reconciliation.
+          Auto-reset eligible={{ grafana_can_auto_reset_state | bool }}.
+          Failed pod={{ grafana_failed_pod_name | default('') }}.
+          Recent logs={{ (grafana_failed_logs.stdout | default('no logs captured')) | regex_replace('\n+', ' | ') }}
+      when: not (grafana_can_auto_reset_state | bool)

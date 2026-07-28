@@ -1,0 +1,6 @@
+---
+- name: Deploy NFS provisioner components
+  ansible.builtin.import_tasks: create.yml
+
+- name: Verify dynamic PVC provisioning
+  ansible.builtin.import_tasks: verify.yml

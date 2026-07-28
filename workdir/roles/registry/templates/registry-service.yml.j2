@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ registry_name }}
+  namespace: {{ registry_namespace }}
+spec:
+  type: {{ registry_service_type }}
+  selector:
+    app: {{ registry_name }}
+  ports:
+    - name: http
+      port: {{ registry_port }}
+      targetPort: http
+{% if registry_service_type == "LoadBalancer" and registry_lb_ip | length > 0 %}
+  loadBalancerIP: {{ registry_lb_ip }}
+{% endif %}

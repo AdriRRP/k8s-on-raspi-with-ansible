@@ -1,0 +1,20 @@
+---
+kubeconfig_local_path: /home/ansible/.kube/config
+
+monitoring_namespace: monitoring
+prometheus_service_type: ClusterIP
+grafana_service_type: ClusterIP
+upgrade_grafana_auto_reset_persistent_state_on_provisioning_failure: false
+
+nfs_namespace: nfs-storage
+nfs_provisioner_name: nfs-subdir-external-provisioner
+storage_class_name: raspi-nfs-provisioner
+
+registry_namespace: registry
+registry_name: registry
+registry_service_type: ClusterIP
+registry_persistence_enabled: true
+registry_storage_class_name: raspi-nfs-provisioner
+registry_lb_ip: ""
+
+metallb_namespace: metallb-system

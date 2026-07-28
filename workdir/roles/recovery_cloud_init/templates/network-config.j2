@@ -1,0 +1,34 @@
+version: 2
+ethernets:
+  primary:
+    match:
+{% if recovery_seed_interface_mac | default('') | trim %}
+      macaddress: "{{ recovery_seed_interface_mac }}"
+{% else %}
+      name: "{{ recovery_seed_interface_name }}"
+{% endif %}
+{% if recovery_seed_network_mode == 'static' %}
+    dhcp4: false
+    addresses:
+      - {{ ansible_host | default(inventory_hostname) }}/{{ recovery_seed_static_prefix }}
+{% if recovery_seed_static_gateway %}
+    routes:
+      - to: default
+        via: {{ recovery_seed_static_gateway }}
+{% endif %}
+{% if recovery_seed_nameservers | length > 0 %}
+    nameservers:
+      addresses:
+{% for ns in recovery_seed_nameservers %}
+        - {{ ns }}
+{% endfor %}
+{% endif %}
+    optional: false
+{% else %}
+    dhcp4: true
+{% if recovery_seed_network_required | bool %}
+    optional: false
+{% else %}
+    optional: true
+{% endif %}
+{% endif %}

@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!workdir/
+workdir/*
+!workdir/requirements-control.txt
+!workdir/requirements-control-lock.txt
+!workdir/requirements.yml

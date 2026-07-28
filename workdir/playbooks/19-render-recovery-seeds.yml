@@ -1,0 +1,7 @@
+---
+- name: Render per-node cloud-init recovery seeds
+  hosts: all
+  gather_facts: false
+
+  roles:
+    - role: recovery_cloud_init

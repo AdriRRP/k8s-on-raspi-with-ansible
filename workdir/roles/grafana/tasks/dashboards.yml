@@ -1,0 +1,12 @@
+---
+- name: Create ConfigMap for Grafana dashboard provider
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-dashboards-provider-configmap.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Create ConfigMap with bundled Grafana dashboards
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-dashboards-configmap.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"

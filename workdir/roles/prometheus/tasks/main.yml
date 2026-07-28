@@ -31,16 +31,16 @@
     definition: "{{ lookup('template', 'prometheus-configmap.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
 
-- name: Deploy Prometheus Deployment
-  kubernetes.core.k8s:
-    state: present
-    definition: "{{ lookup('template', 'prometheus-deployment.yml.j2') | from_yaml }}"
-    kubeconfig: "{{ kubeconfig_local_path }}"
-
 - name: Deploy Prometheus PVC
   kubernetes.core.k8s:
     state: present
     definition: "{{ lookup('template', 'prometheus-pvc.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Prometheus Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'prometheus-deployment.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
 
 - name: Deploy Prometheus Service
@@ -49,29 +49,97 @@
     definition: "{{ lookup('template', 'prometheus-service.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
 
-- name: Wait until Prometheus pod is running and ready
+- name: Wait until Prometheus deployment is updated and ready
   kubernetes.core.k8s_info:
-    kind: Pod
+    api_version: apps/v1
+    kind: Deployment
     namespace: "{{ monitoring_namespace }}"
-    label_selectors:
-      - app=prometheus
+    name: prometheus
     kubeconfig: "{{ kubeconfig_local_path }}"
-  register: prometheus_pods
+  register: prometheus_deployment
   retries: 10
   delay: 10
   until:
-    - prometheus_pods.resources | length > 0
-    - prometheus_pods.resources[0].status.phase == "Running"
-    - prometheus_pods.resources[0].status.containerStatuses is defined
-    - prometheus_pods.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | length == prometheus_pods.resources[0].status.containerStatuses | length
+    - prometheus_deployment.resources | length > 0
+    - >-
+      prometheus_deployment.resources[0].status.observedGeneration | default(0) | int
+      >= prometheus_deployment.resources[0].metadata.generation | default(0) | int
+    - >-
+      prometheus_deployment.resources[0].status.updatedReplicas | default(0) | int
+      == prometheus_deployment.resources[0].spec.replicas | default(1) | int
+    - >-
+      prometheus_deployment.resources[0].status.readyReplicas | default(0) | int
+      == prometheus_deployment.resources[0].spec.replicas | default(1) | int
+    - >-
+      prometheus_deployment.resources[0].status.availableReplicas | default(0) | int
+      == prometheus_deployment.resources[0].spec.replicas | default(1) | int
   changed_when: false
 
-- name: Get Prometheus LoadBalancer IP
-  shell: |
-    kubectl get svc -n {{ monitoring_namespace }} prometheus -o jsonpath='{.status.loadBalancer.ingress[0].ip}' --kubeconfig={{ kubeconfig_local_path }}
-  register: prometheus_lb_ip
-  changed_when: false
+- name: Ensure previous Prometheus smoke pod is absent
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: prometheus-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
 
-- name: Show Prometheus access URL
+- name: Create Prometheus smoke pod
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: prometheus-smoke
+        namespace: "{{ monitoring_namespace }}"
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: smoke
+            image: "{{ platform_smoke_test_image }}"
+            command: ["sh", "-c", "sleep 300"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait until Prometheus smoke pod is ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: prometheus-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: prometheus_smoke_pod
+  retries: 12
+  delay: 5
+  until:
+    - prometheus_smoke_pod.resources | length > 0
+    - prometheus_smoke_pod.resources[0].status.phase == "Running"
+    - prometheus_smoke_pod.resources[0].status.containerStatuses is defined
+    - prometheus_smoke_pod.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length == 1
+  changed_when: false
+  delegate_to: localhost
+
+- name: Verify Prometheus health endpoint from inside the cluster
+  ansible.builtin.shell: >
+    kubectl exec -n {{ monitoring_namespace }} prometheus-smoke --kubeconfig={{ kubeconfig_local_path }} --
+    wget -qO- http://prometheus.{{ monitoring_namespace }}.svc.cluster.local:9090/-/healthy
+  register: prometheus_healthcheck
+  changed_when: false
+  failed_when: "'Healthy' not in prometheus_healthcheck.stdout"
+  delegate_to: localhost
+
+- name: Remove Prometheus smoke pod
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: prometheus-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Show Prometheus service endpoint
   ansible.builtin.debug:
-    msg: "Prometheus is running and available at http://{{ prometheus_lb_ip.stdout }}:9090"
+    msg: "Prometheus is healthy at http://prometheus.{{ monitoring_namespace }}.svc.cluster.local:9090"

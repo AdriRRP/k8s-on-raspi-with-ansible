@@ -1,0 +1,15 @@
+---
+static_ports: >-
+  {{
+    [6443, 2379, 2380, 10250]
+    if inventory_hostname in groups['master']
+    else [10250]
+  }}
+k8s_prereq_legacy_static_ports:
+  - 2379
+  - 2380
+  - 6443
+  - 10250
+  - 10251
+  - 10252
+k8s_prereq_legacy_node_port_range: "30000:32767"

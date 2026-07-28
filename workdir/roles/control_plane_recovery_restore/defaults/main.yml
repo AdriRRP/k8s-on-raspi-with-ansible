@@ -1,0 +1,29 @@
+---
+control_plane_restore_mode: "validate"
+control_plane_restore_confirm_destructive: false
+control_plane_restore_bundle_id: "latest"
+control_plane_restore_bundle_root: "/home/ansible/.kube/outputs/recovery-bundles"
+control_plane_restore_bundle_local_path: >-
+  {{
+    lookup('ansible.builtin.pipe', 'ls -1dt ' ~ control_plane_restore_bundle_root ~ '/* 2>/dev/null | head -n1')
+    if control_plane_restore_bundle_id == 'latest'
+    else control_plane_restore_bundle_root ~ '/' ~ control_plane_restore_bundle_id
+  }}
+control_plane_restore_remote_dir: >-
+  /var/backups/k8s-control-plane-restore/{{
+    control_plane_restore_bundle_id_resolved | default('bundle')
+  }}
+control_plane_restore_rehearsal_dir: >-
+  /var/backups/k8s-control-plane-restore-rehearsal/{{
+    control_plane_restore_bundle_id_resolved | default('bundle')
+  }}
+control_plane_restore_pre_restore_backup_dir: >-
+  /var/backups/k8s-control-plane-pre-restore/{{
+    ansible_date_time.iso8601_basic_short
+    if (ansible_date_time is defined)
+    else lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ')
+  }}
+control_plane_restore_keep_remote_artifacts: false
+control_plane_restore_kubernetes_dir: "/etc/kubernetes"
+control_plane_restore_etcd_data_dir: "/var/lib/etcd"
+control_plane_restore_runtime_namespace: "k8s.io"

@@ -1,0 +1,81 @@
+---
+- name: Wait for all nodes to be Ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: cluster_nodes
+  retries: 30
+  delay: 10
+  until:
+    - cluster_nodes.resources | length > 0
+    - >-
+      cluster_nodes.resources
+      | rejectattr('status.conditions', 'undefined')
+      | map(attribute='status.conditions')
+      | map('selectattr', 'type', 'equalto', 'Ready')
+      | map('selectattr', 'status', 'equalto', 'True')
+      | map('list')
+      | map('length')
+      | min
+      > 0
+  changed_when: false
+  delegate_to: localhost
+
+- name: Ensure test pod is not present from previous runs
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: connectivity-test
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Deploy test pod to verify networking and scheduling
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: connectivity-test
+        namespace: default
+        labels:
+          app: connectivity-test
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: connectivity-test
+            image: "{{ platform_smoke_test_image }}"
+            command: ["sh", "-c", "sleep 60"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for test pod to become Ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: connectivity-test
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: test_pod_ready
+  retries: 12
+  delay: 5
+  until:
+    - test_pod_ready.resources | length > 0
+    - test_pod_ready.resources[0].status.phase == "Running"
+    - test_pod_ready.resources[0].status.containerStatuses is defined
+    - test_pod_ready.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length == 1
+  changed_when: false
+  delegate_to: localhost
+
+- name: Delete test pod
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: connectivity-test
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost

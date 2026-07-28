@@ -1,0 +1,67 @@
+---
+- name: Create housekeeping configuration directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /etc/apt/apt.conf.d
+    - /etc/systemd/journald.conf.d
+    - /etc/tmpfiles.d
+  become: true
+
+- name: Configure APT housekeeping defaults
+  ansible.builtin.template:
+    src: apt-raspi-k8s.conf.j2
+    dest: /etc/apt/apt.conf.d/90-raspi-k8s-housekeeping
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Configure journald retention limits
+  ansible.builtin.template:
+    src: journald-raspi-k8s.conf.j2
+    dest: /etc/systemd/journald.conf.d/60-raspi-k8s.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart systemd-journald
+  become: true
+
+- name: Configure tmpfiles cleanup policy
+  ansible.builtin.template:
+    src: tmpfiles-raspi-k8s.conf.j2
+    dest: /etc/tmpfiles.d/raspi-k8s.conf
+    owner: root
+    group: root
+    mode: '0644'
+  register: common_tmpfiles_config
+  when: common_enable_tmpfiles_cleanup | bool
+  become: true
+
+- name: Ensure weekly fstrim is enabled
+  ansible.builtin.systemd:
+    name: fstrim.timer
+    enabled: true
+    state: started
+  when: common_enable_fstrim_timer | bool
+  become: true
+
+- name: Ensure tmpfiles cleanup timer is enabled
+  ansible.builtin.systemd:
+    name: systemd-tmpfiles-clean.timer
+    enabled: true
+    state: started
+  when: common_enable_tmpfiles_cleanup | bool
+  become: true
+
+- name: Apply tmpfiles cleanup rules immediately
+  ansible.builtin.command: systemd-tmpfiles --clean /etc/tmpfiles.d/raspi-k8s.conf
+  when:
+    - common_enable_tmpfiles_cleanup | bool
+    - common_tmpfiles_config is changed
+  changed_when: false
+  become: true

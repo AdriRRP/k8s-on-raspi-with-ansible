@@ -1,64 +1,33 @@
-- name: Create namespace for registry (if needed)
-  kubernetes.core.k8s:
-    state: present
-    kind: Namespace
-    name: "{{ registry_namespace }}"
-    kubeconfig: "{{ kubeconfig_local_path }}"
-  delegate_to: localhost
-
-- name: Deploy registry Deployment
+---
+- name: Create namespace for registry
   kubernetes.core.k8s:
     state: present
     definition:
-      apiVersion: apps/v1
-      kind: Deployment
+      apiVersion: v1
+      kind: Namespace
       metadata:
-        name: "{{ registry_name }}"
-        namespace: "{{ registry_namespace }}"
-      spec:
-        replicas: 1
-        selector:
-          matchLabels:
-            app: "{{ registry_name }}"
-        template:
-          metadata:
-            labels:
-              app: "{{ registry_name }}"
-          spec:
-            containers:
-              - name: registry
-                image: registry:2
-                ports:
-                  - containerPort: 5000
-                volumeMounts:
-                  - name: registry-storage
-                    mountPath: /var/lib/registry
-            volumes:
-              - name: registry-storage
-                emptyDir: {}  # O usar un PVC si quieres persistencia
+        name: "{{ registry_namespace }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
-- name: Create registry service (ClusterIP or LoadBalancer)
+- name: Create registry PVC when persistence is enabled
   kubernetes.core.k8s:
     state: present
-    definition: >-
-      {{
-        {
-          'apiVersion': 'v1',
-          'kind': 'Service',
-          'metadata': {
-            'name': registry_name,
-            'namespace': registry_namespace
-          },
-          'spec': {
-            'type': 'LoadBalancer' if registry_expose_lb else 'ClusterIP',
-            'selector': { 'app': registry_name },
-            'ports': [ { 'port': registry_port, 'targetPort': 5000 } ]
-          } | combine(
-            { 'loadBalancerIP': registry_lb_ip } if registry_expose_lb else {}
-          )
-        }
-      }}
+    definition: "{{ lookup('template', 'registry-pvc.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  when: registry_persistence_enabled | bool
+  delegate_to: localhost
+
+- name: Deploy registry
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'registry-deployment.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create registry service
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'registry-service.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost

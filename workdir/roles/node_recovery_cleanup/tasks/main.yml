@@ -1,0 +1,44 @@
+---
+- name: Delete previous Kubernetes Node object before rejoin
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+      - delete
+      - node
+      - "{{ inventory_hostname }}"
+      - "--ignore-not-found=true"
+  register: node_recovery_delete_node
+  changed_when: "'deleted' in node_recovery_delete_node.stdout"
+  failed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Reset previous kubeadm state on replacement worker
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - reset
+      - -f
+      - --cleanup-tmp-dir
+  register: node_recovery_kubeadm_reset
+  changed_when: node_recovery_kubeadm_reset.rc == 0
+  failed_when: false
+  become: true
+
+- name: Remove leftover Kubernetes and CNI state on replacement worker
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/cni/net.d
+    - /etc/kubernetes
+    - /var/lib/cni
+    - /var/lib/kubelet
+  become: true
+
+- name: Restart containerd after state cleanup
+  ansible.builtin.systemd:
+    name: containerd
+    state: restarted
+  become: true

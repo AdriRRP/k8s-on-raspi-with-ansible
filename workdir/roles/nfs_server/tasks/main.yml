@@ -1,0 +1,13 @@
+---
+- name: Optional format of NFS volume
+  ansible.builtin.import_tasks: format.yml
+
+- name: Mount NFS volume
+  ansible.builtin.import_tasks: mount.yml
+
+- name: Install and configure NFS
+  ansible.builtin.import_tasks: nfs.yml
+
+- name: Optionally verify NFS accessibility from node
+  ansible.builtin.import_tasks: verify.yml
+  when: nfs_verify_enabled | bool

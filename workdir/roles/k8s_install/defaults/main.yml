@@ -1,0 +1,47 @@
+---
+kubernetes_version: "{{ platform_release_catalog.kubernetes.install_version }}"
+kubernetes_minor_version: "{{ kubernetes_version.split('.')[:2] | join('.') }}"
+k8s_install_repo_minor_version: "{{ kubernetes_minor_version }}"
+kubernetes_deb_revision: >-
+  {{
+    platform_release_catalog.kubernetes.deb_revisions_by_version[kubernetes_version]
+    if (
+      platform_release_catalog.kubernetes.deb_revisions_by_version is defined
+      and kubernetes_version in platform_release_catalog.kubernetes.deb_revisions_by_version
+    )
+    else platform_release_catalog.kubernetes.deb_revision
+  }}
+
+kubernetes_apt_key_url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_install_repo_minor_version }}/deb/Release.key"
+kubernetes_apt_repo_url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_install_repo_minor_version }}/deb/"
+
+kubelet_config_dropin_dir: /etc/kubernetes/kubelet.conf.d
+kubelet_config_dropin_path: "{{ kubelet_config_dropin_dir }}/99-raspi-optimization.conf"
+kubelet_extra_args: "--config-dir={{ kubelet_config_dropin_dir }}"
+
+kubelet_reserved_ephemeral_storage: "1Gi"
+kubelet_reserved_profiles:
+  small:
+    cpu: "150m"
+    memory: "256Mi"
+    eviction_memory_available: "150Mi"
+  medium:
+    cpu: "200m"
+    memory: "384Mi"
+    eviction_memory_available: "200Mi"
+  large:
+    cpu: "250m"
+    memory: "512Mi"
+    eviction_memory_available: "300Mi"
+  xlarge:
+    cpu: "300m"
+    memory: "768Mi"
+    eviction_memory_available: "500Mi"
+
+kubelet_image_gc_high_threshold_percent: 70
+kubelet_image_gc_low_threshold_percent: 60
+kubelet_node_status_max_images: 20
+kubelet_container_log_max_size: "10Mi"
+kubelet_container_log_max_files: 3
+kubelet_serialize_image_pulls: true
+kubelet_max_parallel_image_pulls: 2

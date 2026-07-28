@@ -1,0 +1,307 @@
+---
+- name: Ensure backup directory exists for disabled third-party APT sources
+  ansible.builtin.file:
+    path: /var/backups/ubuntu-release-upgrader-sources
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Find non-Ubuntu APT source files before Ubuntu release upgrade
+  ansible.builtin.find:
+    paths: /etc/apt/sources.list.d
+    patterns:
+      - "*.list"
+      - "*.sources"
+      - "*.disabled-by-os-upgrade"
+    file_type: file
+    excludes:
+      - ubuntu.sources
+  register: ubuntu_release_upgrade_non_ubuntu_sources
+  become: true
+
+- name: Move non-Ubuntu APT source files out of sources.list.d before Ubuntu release upgrade
+  ansible.builtin.command:
+    argv:
+      - mv
+      - "{{ item.path }}"
+      - "/var/backups/ubuntu-release-upgrader-sources/{{ item.path | basename }}"
+  loop: "{{ ubuntu_release_upgrade_non_ubuntu_sources.files }}"
+  loop_control:
+    label: "{{ item.path }}"
+  changed_when: true
+  when: ubuntu_release_upgrade_non_ubuntu_sources.matched | int > 0
+  become: true
+
+- name: Ensure ubuntu-release-upgrader tooling is installed
+  ansible.builtin.apt:
+    name: ubuntu-release-upgrader-core
+    state: present
+    update_cache: true
+  become: true
+
+- name: Set Ubuntu release-upgrader prompt policy
+  ansible.builtin.lineinfile:
+    path: /etc/update-manager/release-upgrades
+    regexp: '^Prompt='
+    line: "Prompt={{ ubuntu_release_upgrade_prompt }}"
+    create: true
+    mode: "0644"
+  become: true
+
+- name: Resolve release-specific upgrade prerequisites from the platform catalog
+  ansible.builtin.set_fact:
+    ubuntu_release_upgrade_release_prerequisites: >-
+      {{
+        platform_release_catalog.os.release_upgrade_prerequisites[
+          ubuntu_release_upgrade_target_version
+        ] | default({})
+      }}
+    ubuntu_release_upgrade_distro_info_data: >-
+      {{
+        (
+          platform_release_catalog.os.release_upgrade_prerequisites[
+            ubuntu_release_upgrade_target_version
+          ] | default({})
+        ).distro_info_data | default({})
+      }}
+    ubuntu_release_upgrade_requires_rpi_eeprom_update: >-
+      {{
+        (
+          platform_release_catalog.os.release_upgrade_prerequisites[
+            ubuntu_release_upgrade_target_version
+          ] | default({})
+        ).require_raspberry_pi_eeprom_update | default(false)
+      }}
+    ubuntu_release_upgrade_recover_ssh_via_kubernetes_after_reboot: >-
+      {{
+        (
+          platform_release_catalog.os.release_upgrade_prerequisites[
+            ubuntu_release_upgrade_target_version
+          ] | default({})
+        ).recover_ssh_via_kubernetes_after_reboot | default(false)
+      }}
+    ubuntu_release_upgrade_ssh_timeout_before_k8s_recovery: >-
+      {{
+        (
+          platform_release_catalog.os.release_upgrade_prerequisites[
+            ubuntu_release_upgrade_target_version
+          ] | default({})
+        ).ssh_timeout_before_k8s_recovery | default(300)
+      }}
+
+- name: Fully patch current Ubuntu release before release upgrade
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    autoremove: true
+  become: true
+
+- name: Check whether Ubuntu release patching requires a reboot
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: ubuntu_release_upgrade_reboot_required
+  become: true
+
+- name: Reboot node after Ubuntu pre-upgrade patching
+  ansible.builtin.include_role:
+    name: safe_reboot
+  vars:
+    safe_reboot_timeout: 3600
+    safe_reboot_connect_timeout: 10
+  when: ubuntu_release_upgrade_reboot_required.stat.exists
+
+- name: Check whether Ubuntu distro metadata is current enough for release upgrades
+  ansible.builtin.command:
+    argv:
+      - ubuntu-distro-info
+      - --devel
+  register: ubuntu_release_upgrade_devel_release
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Refresh distro-info-data for EOL Ubuntu release upgrades
+  when: >-
+    ubuntu_release_upgrade_distro_info_data | length > 0
+    and
+    ubuntu_release_upgrade_devel_release.rc != 0
+    and 'Distribution data outdated'
+    in (
+      ubuntu_release_upgrade_devel_release.stdout
+      ~ ubuntu_release_upgrade_devel_release.stderr
+    )
+  block:
+    - name: Download refreshed distro-info-data package
+      ansible.builtin.get_url:
+        url: "{{ ubuntu_release_upgrade_distro_info_data.url }}"
+        dest: "/tmp/distro-info-data_{{ ubuntu_release_upgrade_distro_info_data.version }}_all.deb"
+        checksum: "sha256:{{ ubuntu_release_upgrade_distro_info_data.checksum }}"
+        mode: "0644"
+      become: true
+
+    - name: Install refreshed distro-info-data package
+      ansible.builtin.apt:
+        deb: "/tmp/distro-info-data_{{ ubuntu_release_upgrade_distro_info_data.version }}_all.deb"
+      become: true
+
+    - name: Re-check Ubuntu distro metadata after distro-info-data refresh
+      ansible.builtin.command:
+        argv:
+          - ubuntu-distro-info
+          - --devel
+      register: ubuntu_release_upgrade_devel_release_refreshed
+      changed_when: false
+      become: true
+
+    - name: Validate refreshed distro-info-data metadata
+      ansible.builtin.assert:
+        that:
+          - ubuntu_release_upgrade_devel_release_refreshed.rc == 0
+        fail_msg: >-
+          No se pudo refrescar la metadata de releases de Ubuntu para
+          {{ inventory_hostname }}. Salida:
+          {{ ubuntu_release_upgrade_devel_release_refreshed.stdout | default('') }}
+          {{ ubuntu_release_upgrade_devel_release_refreshed.stderr | default('') }}
+
+- name: Check Raspberry Pi boot EEPROM status required by target Ubuntu release
+  ansible.builtin.command:
+    argv:
+      - rpi-eeprom-update
+  register: ubuntu_release_upgrade_eeprom_status
+  changed_when: false
+  failed_when: false
+  when: ubuntu_release_upgrade_requires_rpi_eeprom_update | bool
+  become: true
+
+- name: Apply Raspberry Pi boot EEPROM update before Ubuntu release upgrade
+  ansible.builtin.command:
+    argv:
+      - rpi-eeprom-update
+      - -a
+  register: ubuntu_release_upgrade_eeprom_apply
+  changed_when: >-
+    'eeprom updates pending'
+    in (
+      ubuntu_release_upgrade_eeprom_apply.stdout
+      ~ ubuntu_release_upgrade_eeprom_apply.stderr
+    ) | lower
+  when:
+    - ubuntu_release_upgrade_requires_rpi_eeprom_update | bool
+    - ubuntu_release_upgrade_eeprom_status.rc != 127
+  become: true
+
+- name: Reboot node after Raspberry Pi boot EEPROM update
+  ansible.builtin.include_role:
+    name: safe_reboot
+  vars:
+    safe_reboot_timeout: 3600
+    safe_reboot_connect_timeout: 10
+  when:
+    - ubuntu_release_upgrade_requires_rpi_eeprom_update | bool
+    - ubuntu_release_upgrade_eeprom_apply is defined
+    - ubuntu_release_upgrade_eeprom_apply.changed
+
+- name: Run Ubuntu release upgrade
+  ansible.builtin.shell: |
+    set -eu
+    apt_config="$(mktemp /tmp/do-release-upgrade-apt.XXXXXX.conf)"
+    cleanup() {
+      rm -f "$apt_config"
+    }
+    trap cleanup EXIT
+    printf 'APT::Sandbox::User "root";\n' > "$apt_config"
+    APT_CONFIG="$apt_config" \
+      do-release-upgrade \
+      --frontend=DistUpgradeViewNonInteractive \
+      --mode=server
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+    RELEASE_UPGRADER_NO_SCREEN: "1"
+  register: ubuntu_release_upgrade_command
+  changed_when: true
+  become: true
+
+- name: Ensure SSH access is enabled before post-upgrade reboot
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - ssh.socket
+    - ssh.service
+  become: true
+
+- name: Reboot node after Ubuntu release upgrade
+  ansible.builtin.include_role:
+    name: safe_reboot
+  vars:
+    safe_reboot_timeout: 3600
+    safe_reboot_connect_timeout: 10
+    safe_reboot_ssh_timeout_before_k8s_recovery: "{{ ubuntu_release_upgrade_ssh_timeout_before_k8s_recovery }}"
+    safe_reboot_recover_ssh_via_kubernetes: "{{ ubuntu_release_upgrade_recover_ssh_via_kubernetes_after_reboot }}"
+    safe_reboot_recovery_node_name: "{{ inventory_hostname }}"
+    safe_reboot_recovery_kubeconfig: "{{ kubeconfig_local_path }}"
+    safe_reboot_recovery_debug_image: "{{ platform_smoke_test_image }}"
+
+- name: Re-enable SSH access after Ubuntu release upgrade
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - ssh.socket
+    - ssh.service
+  become: true
+
+- name: Read installed Kubernetes minor after Ubuntu release upgrade
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - version
+      - -o
+      - short
+  register: ubuntu_release_upgrade_kubeadm_version
+  changed_when: false
+  failed_when: false
+
+- name: Restore Kubernetes repository after Ubuntu release upgrade
+  ansible.builtin.include_role:
+    name: k8s_install
+    tasks_from: repo.yml
+  vars:
+    k8s_install_repo_minor_version: >-
+      {{
+        ubuntu_release_upgrade_kubeadm_version.stdout
+        | regex_replace('^v?(\\d+\\.\\d+).*$', '\\1')
+      }}
+  when: ubuntu_release_upgrade_kubeadm_version.rc == 0
+
+- name: Remove obsolete Kubernetes repository backups
+  ansible.builtin.file:
+    path: "/var/backups/ubuntu-release-upgrader-sources/{{ item }}"
+    state: absent
+  loop:
+    - kubernetes.list
+    - kubernetes.sources
+  when: ubuntu_release_upgrade_kubeadm_version.rc == 0
+  become: true
+
+- name: Read Ubuntu version after release upgrade
+  ansible.builtin.command:
+    argv:
+      - lsb_release
+      - -rs
+  register: ubuntu_release_upgrade_version
+  changed_when: false
+
+- name: Validate Ubuntu version after release upgrade
+  ansible.builtin.assert:
+    that:
+      - ubuntu_release_upgrade_version.stdout | trim == ubuntu_release_upgrade_target_version
+    fail_msg: >-
+      Ubuntu release upgrade completed but the node version is
+      {{ ubuntu_release_upgrade_version.stdout | trim }} instead of
+      {{ ubuntu_release_upgrade_target_version }}.

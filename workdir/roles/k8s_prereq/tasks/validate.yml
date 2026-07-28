@@ -1,0 +1,32 @@
+---
+- name: Check currently listening TCP ports using ss
+  ansible.builtin.shell: |
+    set -o pipefail
+    ss -tln | awk '{print $4}' | grep -oE '[0-9]+$' | sort -n | uniq
+  register: open_ports_raw
+  changed_when: false
+  failed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Show raw open port output
+  ansible.builtin.debug:
+    var: open_ports_raw.stdout_lines
+
+- name: Extract list of open ports
+  ansible.builtin.set_fact:
+    open_ports_detected: "{{ open_ports_raw.stdout_lines | default([]) | map('int') | list }}"
+
+- name: Compare detected ports with expected static ports
+  ansible.builtin.set_fact:
+    expected_ports_open: "{{ static_ports | intersect(open_ports_detected) }}"
+    expected_ports_closed: "{{ static_ports | difference(open_ports_detected) }}"
+
+- name: Show detected open static ports
+  ansible.builtin.debug:
+    msg: "Open ports detected from expected list: {{ expected_ports_open | sort }}"
+
+- name: Show missing expected ports (may be closed or unused)
+  when: expected_ports_closed | length > 0
+  ansible.builtin.debug:
+    msg: "Expected ports not currently listening: {{ expected_ports_closed | sort }}"

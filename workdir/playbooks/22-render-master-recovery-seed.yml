@@ -1,0 +1,44 @@
+---
+- name: Render the control-plane recovery seed
+  hosts: master
+  gather_facts: true
+
+  pre_tasks:
+    - name: Resolve control-plane recovery network settings
+      ansible.builtin.set_fact:
+        recovery_seed_resolved_interface_name: >-
+          {{
+            recovery_seed_control_plane_interface_name | trim
+            if (recovery_seed_control_plane_interface_name | default('') | trim | length) > 0
+            else (ansible_default_ipv4.interface | default(recovery_seed_interface_name))
+          }}
+        recovery_seed_resolved_interface_mac: >-
+          {{
+            recovery_seed_control_plane_interface_mac | trim
+            if (recovery_seed_control_plane_interface_mac | default('') | trim | length) > 0
+            else (ansible_default_ipv4.macaddress | default(''))
+          }}
+        recovery_seed_resolved_static_gateway: >-
+          {{
+            recovery_seed_control_plane_static_gateway | trim
+            if (recovery_seed_control_plane_static_gateway | default('') | trim | length) > 0
+            else (ansible_default_ipv4.gateway | default(recovery_seed_static_gateway))
+          }}
+        recovery_seed_resolved_nameservers: >-
+          {{
+            recovery_seed_control_plane_nameservers
+            if (recovery_seed_control_plane_nameservers | default([]) | length) > 0
+            else (ansible_dns.nameservers | default(recovery_seed_nameservers))
+          }}
+
+  roles:
+    - role: recovery_cloud_init
+      vars:
+        recovery_seed_network_mode: static
+        recovery_seed_network_required: true
+        recovery_seed_interface_name: "{{ recovery_seed_resolved_interface_name }}"
+        recovery_seed_interface_mac: "{{ recovery_seed_resolved_interface_mac }}"
+        recovery_seed_static_prefix: "{{ recovery_seed_control_plane_static_prefix }}"
+        recovery_seed_static_gateway: "{{ recovery_seed_resolved_static_gateway }}"
+        recovery_seed_nameservers: "{{ recovery_seed_resolved_nameservers }}"
+        recovery_seed_cloud_init_package_update: false

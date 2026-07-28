@@ -1,8 +1,8 @@
 ---
-- name: Set up NFS server on raspi-master
-  hosts: raspi-master
+- name: Set up NFS server on the control-plane node
+  hosts: master
   become: true
   gather_facts: true
 
   roles:
-    - nfs-server
+    - nfs_server

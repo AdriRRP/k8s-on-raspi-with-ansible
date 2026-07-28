@@ -5,6 +5,9 @@ metadata:
   namespace: {{ monitoring_namespace }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       app: grafana
@@ -13,16 +16,68 @@ spec:
       labels:
         app: grafana
     spec:
+{% if grafana_runtime_node_name | length > 0 %}
+      nodeName: {{ grafana_runtime_node_name }}
+{% endif %}
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
-          image: grafana/grafana:latest
+          image: {{ grafana_image }}
+          imagePullPolicy: IfNotPresent
           env:
             - name: GF_SECURITY_ADMIN_USER
-              value: "{{ grafana_admin_user }}"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-user
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: "{{ grafana_admin_password }}"
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-password
           ports:
-            - containerPort: 3000
+            - name: http
+              containerPort: 3000
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 472
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: grafana-config
               mountPath: /etc/grafana/grafana.ini
@@ -32,6 +87,15 @@ spec:
               mountPath: /etc/grafana/provisioning/datasources/prometheus-datasource.yaml
               subPath: prometheus-datasource.yaml
               readOnly: true
+{% if grafana_provision_bundled_dashboards | bool %}
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+{% endif %}
             - name: grafana-storage
               mountPath: /var/lib/grafana
       volumes:
@@ -41,6 +105,14 @@ spec:
         - name: datasource
           configMap:
             name: grafana-datasource
+{% if grafana_provision_bundled_dashboards | bool %}
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+{% endif %}
         - name: grafana-storage
           persistentVolumeClaim:
             claimName: grafana-pvc

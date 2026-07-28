@@ -1,0 +1,108 @@
+---
+- name: Wait for a reflashed node to finish first boot and verify recovery prerequisites
+  hosts: all
+  become: false
+  gather_facts: false
+
+  pre_tasks:
+    - name: Ensure local SSH directory exists before awaiting a recovered node
+      ansible.builtin.file:
+        path: /home/ansible/.ssh
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+
+    - name: Remove stale known_hosts entries before reconnecting to a recovered node
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -R
+          - "{{ item }}"
+          - -f
+          - "{{ recovery_known_hosts_path }}"
+      loop:
+        - "{{ inventory_hostname }}"
+        - "{{ ansible_host | default(inventory_hostname) }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      failed_when: false
+
+  tasks:
+    - name: Wait for SSH connectivity on the recovered node
+      ansible.builtin.wait_for_connection:
+        delay: "{{ recovery_node_wait_for_connection_delay }}"
+        timeout: "{{ recovery_node_wait_for_connection_timeout }}"
+
+    - name: Gather minimal network facts from the recovered node
+      ansible.builtin.setup:
+        gather_subset:
+          - min
+          - network
+
+    - name: Wait for cloud-init to finish on the recovered node
+      ansible.builtin.command:
+        argv:
+          - cloud-init
+          - status
+          - --wait
+      changed_when: false
+
+    - name: Capture cloud-init status summary
+      ansible.builtin.command:
+        argv:
+          - cloud-init
+          - status
+      register: recovery_node_cloud_init_status
+      changed_when: false
+
+    - name: Read static hostname from the recovered node
+      ansible.builtin.command:
+        argv:
+          - hostnamectl
+          - --static
+      register: recovery_node_hostname
+      changed_when: false
+
+    - name: Assert the recovered node returned with the expected hostname
+      ansible.builtin.assert:
+        that:
+          - recovery_node_hostname.stdout | trim == inventory_hostname
+        fail_msg: >-
+          Recovered node answered with hostname
+          {{ recovery_node_hostname.stdout | trim }}, expected {{ inventory_hostname }}.
+
+    - name: Assert the recovered node returned on the expected inventory IP
+      ansible.builtin.assert:
+        that:
+          - ansible_host is not defined or ansible_host | trim | length == 0 or ansible_default_ipv4.address == ansible_host
+        fail_msg: >-
+          Recovered node default IPv4 address is {{ ansible_default_ipv4.address | default('unknown') }},
+          expected {{ ansible_host | default('inventory address not set') }}.
+
+    - name: Ensure local recovery-await report directory exists
+      ansible.builtin.file:
+        path: "{{ kubernetes_outputs }}/recovery-await"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: false
+
+    - name: Write a recovery-await report for the node
+      ansible.builtin.copy:
+        dest: "{{ kubernetes_outputs }}/recovery-await/{{ inventory_hostname }}.json"
+        mode: "0644"
+        content: |
+          {{
+            {
+              'inventory_hostname': inventory_hostname,
+              'ansible_host': ansible_host | default(inventory_hostname),
+              'hostname': recovery_node_hostname.stdout | trim,
+              'cloud_init_status': recovery_node_cloud_init_status.stdout | trim,
+              'default_ipv4': ansible_default_ipv4 | default({}),
+              'dns_nameservers': ansible_dns.nameservers | default([])
+            } | to_nice_json
+          }}
+      delegate_to: localhost
+      become: false

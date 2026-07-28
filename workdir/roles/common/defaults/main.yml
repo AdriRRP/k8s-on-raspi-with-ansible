@@ -1,0 +1,37 @@
+---
+common_apt_autoclean_enabled: true
+common_apt_clean_enabled: true
+common_apt_autoremove_enabled: true
+common_apt_autoremove_purge: true
+
+common_apt_periodic_autoclean_interval_days: 7
+common_apt_keep_downloaded_packages: false
+
+common_journald_system_max_use: "200M"
+common_journald_runtime_max_use: "50M"
+common_journald_system_max_file_size: "25M"
+common_journald_runtime_max_file_size: "10M"
+common_journald_max_file_sec: "7day"
+common_journald_max_retention_sec: "14day"
+common_journald_storage: "auto"
+
+common_enable_tmpfiles_cleanup: true
+common_tmp_cleanup_age: "7d"
+common_var_tmp_cleanup_age: "30d"
+
+common_enable_fstrim_timer: true
+
+common_required_packages:
+  - ca-certificates
+  - curl
+  - lsb-release
+  - nfs-common
+
+common_install_admin_tools: false
+common_admin_packages:
+  - bat
+  - git
+  - htop
+  - tmux
+  - tree
+  - vim

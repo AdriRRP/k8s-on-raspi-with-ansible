@@ -1,0 +1,186 @@
+---
+- name: Ensure CoreDNS pods are running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: kube-system
+    label_selectors:
+      - "k8s-app=kube-dns"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: coredns_pods
+  failed_when: coredns_pods.resources | length == 0
+  changed_when: false
+  delegate_to: localhost
+
+- name: Fail if no CoreDNS pods are running
+  ansible.builtin.fail:
+    msg: "No CoreDNS pods are running in the cluster."
+  when: coredns_pods.resources | length == 0
+  delegate_to: localhost
+
+- name: Check DNS endpoints
+  ansible.builtin.shell: |
+    kubectl get endpoints kube-dns -n kube-system -o jsonpath='{.subsets[*].addresses[*].ip}' --kubeconfig={{ kubeconfig_local_path }}
+  register: coredns_endpoints
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+
+- name: Verify DNS endpoints are correct
+  ansible.builtin.fail:
+    msg: "DNS endpoints not exposed correctly."
+  when: coredns_endpoints.stdout == ""
+  delegate_to: localhost
+
+- name: Create dnstest namespace for DNS testing
+  kubernetes.core.k8s:
+    state: present
+    kind: Namespace
+    name: dnstest
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create pod in dnstest namespace with a specific hostname for DNS testing
+  kubernetes.core.k8s:
+    state: present
+    kind: Pod
+    namespace: dnstest
+    name: testpod
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: testpod
+        namespace: dnstest
+        labels:
+          app: testpod
+      spec:
+        containers:
+          - name: testcontainer
+            image: "{{ platform_smoke_test_image }}"
+            command: ["sleep", "3600"]
+  register: testpod
+  failed_when: testpod.failed is defined and testpod.failed
+  changed_when: testpod.changed is defined
+  delegate_to: localhost
+
+- name: Create a Service in dnstest namespace for the test pod
+  kubernetes.core.k8s:
+    state: present
+    kind: Service
+    namespace: dnstest
+    name: testservice
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: testservice
+        namespace: dnstest
+      spec:
+        selector:
+          app: testpod
+        ports:
+          - port: 80
+            targetPort: 80
+  delegate_to: localhost
+
+- name: Ensure previous dnsutils pod is absent before DNS testing
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    namespace: default
+    name: dnsutils
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Deploy dnsutils pod for DNS checks
+  kubernetes.core.k8s:
+    state: present
+    kind: Pod
+    namespace: default
+    name: dnsutils
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: dnsutils
+        namespace: default
+      spec:
+        containers:
+          - name: dnsutils
+            image: "{{ platform_smoke_test_image }}"
+            imagePullPolicy: IfNotPresent
+            command: ["sleep", "3600"]
+        restartPolicy: Always
+  register: dnsutils_pod
+  failed_when: dnsutils_pod.failed is defined and dnsutils_pod.failed
+  changed_when: dnsutils_pod.changed is defined
+  delegate_to: localhost
+
+- name: Wait for dnsutils pod to be running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: default
+    name: dnsutils
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: dnsutils_status
+  until: dnsutils_status.resources | length > 0 and dnsutils_status.resources[0].status.phase == "Running"
+  retries: 5
+  delay: 10
+  failed_when: false
+  delegate_to: localhost
+
+- name: Wait for testpod to be running
+  kubernetes.core.k8s_info:
+    kind: Pod
+    namespace: dnstest
+    name: testpod
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: testpod_status
+  until: testpod_status.resources | length > 0 and testpod_status.resources[0].status.phase == "Running"
+  retries: 5
+  delay: 10
+  failed_when: false
+  delegate_to: localhost
+
+- name: Verify DNS resolution by querying testservice from dnsutils
+  ansible.builtin.shell: |
+    kubectl exec -n default dnsutils --kubeconfig={{ kubeconfig_local_path }} -- nslookup testservice.dnstest.svc.cluster.local
+  register: dns_test_result
+  failed_when: dns_test_result.rc != 0
+  changed_when: false
+  delegate_to: localhost
+
+- name: Delete the dnsutils pod after testing
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    namespace: default
+    name: dnsutils
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Delete the testpod in dnstest namespace after testing
+  kubernetes.core.k8s:
+    state: absent
+    kind: Pod
+    namespace: dnstest
+    name: testpod
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Delete the testservice in dnstest namespace after testing
+  kubernetes.core.k8s:
+    state: absent
+    kind: Service
+    namespace: dnstest
+    name: testservice
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Delete the dnstest namespace after testing
+  kubernetes.core.k8s:
+    state: absent
+    kind: Namespace
+    name: dnstest
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost

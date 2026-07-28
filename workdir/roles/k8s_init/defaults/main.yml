@@ -1,0 +1,22 @@
+---
+pod_network_cidr: "10.244.0.0/16"
+service_network_cidr: "10.96.0.0/12"
+kubeconfig_path: "/etc/kubernetes/admin.conf"
+kubeconfig_local_path: "/home/ansible/.kube/config"
+k8s_init_apply_kubeconfig_path: "{{ kubeconfig_path }}"
+k8s_init_cri_socket: "unix:///run/containerd/containerd.sock"
+k8s_init_kubeadm_config_path: "/tmp/kubeadm-init-config.yaml"
+kube_proxy_mode: "iptables"
+calico_linux_dataplane: "Iptables"
+kubernetes_outputs: "/home/ansible/.kube/outputs/"
+calico_version: "{{ platform_release_catalog.networking.calico_version }}"
+calico_tigera_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml"
+calico_crds_url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/custom-resources.yaml"
+calico_tigera_checksum: "{{ platform_release_catalog.networking.calico_tigera_checksum }}"
+calico_custom_resources_checksum: >-
+  {{ platform_release_catalog.networking.calico_custom_resources_checksum }}
+calico_required_crds:
+  - installations.operator.tigera.io
+  - apiservers.operator.tigera.io
+  - goldmanes.operator.tigera.io
+  - whiskers.operator.tigera.io

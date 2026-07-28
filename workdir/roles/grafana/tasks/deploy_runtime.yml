@@ -1,0 +1,117 @@
+---
+- name: Deploy Grafana PVC
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-pvc.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Grafana Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-deployment.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Deploy Grafana Service
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-service.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Wait for Grafana deployment to be updated and ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ monitoring_namespace }}"
+    name: grafana
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: grafana_deployment
+  retries: 20
+  delay: 5
+  until:
+    - grafana_deployment.resources | length > 0
+    - >-
+      grafana_deployment.resources[0].status.observedGeneration | default(0) | int
+      >= grafana_deployment.resources[0].metadata.generation | default(0) | int
+    - >-
+      grafana_deployment.resources[0].status.updatedReplicas | default(0) | int
+      == grafana_deployment.resources[0].spec.replicas | default(1) | int
+    - >-
+      grafana_deployment.resources[0].status.readyReplicas | default(0) | int
+      == grafana_deployment.resources[0].spec.replicas | default(1) | int
+    - >-
+      grafana_deployment.resources[0].status.availableReplicas | default(0) | int
+      == grafana_deployment.resources[0].spec.replicas | default(1) | int
+  changed_when: false
+
+- name: Ensure previous Grafana smoke pod is absent
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: grafana-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create Grafana smoke pod
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: grafana-smoke
+        namespace: "{{ monitoring_namespace }}"
+      spec:
+        restartPolicy: Never
+        containers:
+          - name: smoke
+            image: "{{ platform_smoke_test_image }}"
+            command: ["sh", "-c", "sleep 300"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for Grafana smoke pod to be ready
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: grafana-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: grafana_smoke_pod
+  retries: 12
+  delay: 5
+  until:
+    - grafana_smoke_pod.resources | length > 0
+    - grafana_smoke_pod.resources[0].status.phase == "Running"
+    - grafana_smoke_pod.resources[0].status.containerStatuses is defined
+    - grafana_smoke_pod.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length == 1
+  changed_when: false
+  delegate_to: localhost
+
+- name: Wait for Grafana health endpoint from inside the cluster
+  ansible.builtin.shell: >
+    kubectl exec -n {{ monitoring_namespace }} grafana-smoke --kubeconfig={{ kubeconfig_local_path }} --
+    wget -qO- http://grafana.{{ monitoring_namespace }}.svc.cluster.local:3000/api/health
+  register: grafana_health
+  retries: 10
+  delay: 5
+  until: '"ok" in grafana_health.stdout'
+  changed_when: false
+  delegate_to: localhost
+
+- name: Remove Grafana smoke pod
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: grafana-smoke
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Show Grafana connection details
+  ansible.builtin.debug:
+    msg: >-
+      Grafana is healthy at http://grafana.{{ monitoring_namespace }}.svc.cluster.local:3000
+      (user: {{ grafana_admin_user }}, password stored at {{ grafana_admin_password_file | default('configured variable') }})

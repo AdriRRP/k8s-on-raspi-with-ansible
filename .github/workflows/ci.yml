@@ -1,0 +1,55 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Ansible and Control Image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd  # v4.0.0
+
+      - name: Build control image
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294  # v7.0.0
+        with:
+          context: .
+          load: true
+          tags: ansible-k8s-raspberry-audit:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Check cluster-control shell syntax
+        run: bash -n cluster-control.sh
+
+      - name: Check diff formatting
+        run: git diff --check
+
+      - name: Run repository validation
+        run: >
+          docker run --rm
+          --security-opt no-new-privileges
+          -v "$PWD:/src:ro"
+          -w /src
+          ansible-k8s-raspberry-audit:ci
+          ./tools/validate.sh

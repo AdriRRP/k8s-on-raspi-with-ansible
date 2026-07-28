@@ -1,0 +1,223 @@
+---
+- name: Run baseline Kubernetes verification
+  ansible.builtin.include_role:
+    name: k8s_verify
+
+- name: Discover cluster namespaces
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: cluster_recovery_verify_namespaces
+  changed_when: false
+  delegate_to: localhost
+
+- name: Normalize detected namespace names
+  ansible.builtin.set_fact:
+    cluster_recovery_verify_namespace_names: >-
+      {{
+        cluster_recovery_verify_namespaces.resources
+        | map(attribute='metadata.name')
+        | list
+      }}
+
+- name: Verify MetalLB control plane when installed
+  ansible.builtin.include_role:
+    name: metallb
+    tasks_from: verify.yml
+  when: cluster_recovery_verify_metallb_namespace in cluster_recovery_verify_namespace_names
+
+- name: Verify MetalLB data plane when installed
+  ansible.builtin.include_role:
+    name: metallb
+    tasks_from: echo-test.yml
+  when: cluster_recovery_verify_metallb_namespace in cluster_recovery_verify_namespace_names
+
+- name: Verify NFS dynamic provisioning when installed
+  ansible.builtin.include_role:
+    name: nfs_provisioner
+    tasks_from: verify.yml
+  when: cluster_recovery_verify_nfs_namespace in cluster_recovery_verify_namespace_names
+
+- name: Verify internal registry when installed
+  ansible.builtin.include_role:
+    name: registry
+    tasks_from: verify.yml
+  when: cluster_recovery_verify_registry_namespace in cluster_recovery_verify_namespace_names
+
+- name: Gather monitoring deployments when namespace exists
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: cluster_recovery_verify_monitoring_deployments_info
+  changed_when: false
+  delegate_to: localhost
+  when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
+
+- name: Normalize detected monitoring deployment names
+  ansible.builtin.set_fact:
+    cluster_recovery_verify_monitoring_deployment_names: >-
+      {{
+        cluster_recovery_verify_monitoring_deployments_info.resources
+        | default([])
+        | map(attribute='metadata.name')
+        | list
+      }}
+  when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
+
+- name: Wait for installed monitoring deployments to become available
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+    name: "{{ item }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: cluster_recovery_verify_monitoring_deployment_status
+  retries: 30
+  delay: 10
+  until:
+    - cluster_recovery_verify_monitoring_deployment_status.resources | length > 0
+    - >-
+      cluster_recovery_verify_monitoring_deployment_status.resources[0].status.observedGeneration
+      | default(0) | int
+      >=
+      cluster_recovery_verify_monitoring_deployment_status.resources[0].metadata.generation
+      | default(0) | int
+    - >-
+      cluster_recovery_verify_monitoring_deployment_status.resources[0].status.availableReplicas
+      | default(0) | int
+      >=
+      cluster_recovery_verify_monitoring_deployment_status.resources[0].spec.replicas
+      | default(1) | int
+  loop: >-
+    {{
+      cluster_recovery_verify_monitoring_deployments
+      | intersect(cluster_recovery_verify_monitoring_deployment_names | default([]))
+    }}
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+  delegate_to: localhost
+  when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
+
+- name: Gather node-exporter DaemonSet when monitoring namespace exists
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+    name: node-exporter
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: cluster_recovery_verify_node_exporter
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+  when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
+
+- name: Assert node-exporter DaemonSet is fully ready when installed
+  ansible.builtin.assert:
+    that:
+      - cluster_recovery_verify_node_exporter.resources | length == 1
+      - >-
+        cluster_recovery_verify_node_exporter.resources[0].status.numberReady
+        | default(0) | int
+        ==
+        cluster_recovery_verify_node_exporter.resources[0].status.desiredNumberScheduled
+        | default(0) | int
+    fail_msg: Node exporter is installed but not fully ready after recovery.
+  when:
+    - cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
+    - cluster_recovery_verify_node_exporter.resources | default([]) | length > 0
+
+- name: Verify observability endpoints when monitoring namespace exists
+  when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
+  block:
+    - name: Ensure previous observability smoke pod is absent
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "{{ cluster_recovery_verify_observability_smoke_pod }}"
+        namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      delegate_to: localhost
+
+    - name: Create observability smoke pod
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ cluster_recovery_verify_observability_smoke_pod }}"
+            namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: smoke
+                image: "{{ platform_smoke_test_image }}"
+                command: ["sh", "-c", "sleep 300"]
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      delegate_to: localhost
+
+    - name: Wait for observability smoke pod to become ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: "{{ cluster_recovery_verify_observability_smoke_pod }}"
+        namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      register: cluster_recovery_verify_smoke_pod
+      retries: 20
+      delay: 5
+      until:
+        - cluster_recovery_verify_smoke_pod.resources | length > 0
+        - cluster_recovery_verify_smoke_pod.resources[0].status.phase == "Running"
+        - cluster_recovery_verify_smoke_pod.resources[0].status.containerStatuses is defined
+        - >-
+          cluster_recovery_verify_smoke_pod.resources[0].status.containerStatuses
+          | selectattr('ready', 'equalto', true)
+          | list
+          | length
+          == 1
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Verify Prometheus health endpoint when installed
+      ansible.builtin.command: >-
+        kubectl exec -n {{ cluster_recovery_verify_monitoring_namespace }}
+        {{ cluster_recovery_verify_observability_smoke_pod }}
+        --kubeconfig={{ kubeconfig_local_path }} --
+        wget -qO- http://prometheus.{{ cluster_recovery_verify_monitoring_namespace }}.svc.cluster.local:9090/-/healthy
+      register: cluster_recovery_verify_prometheus_health
+      changed_when: false
+      failed_when: "'Healthy' not in cluster_recovery_verify_prometheus_health.stdout"
+      delegate_to: localhost
+      when: "'prometheus' in (cluster_recovery_verify_monitoring_deployment_names | default([]))"
+
+    - name: Verify Grafana health endpoint when installed
+      ansible.builtin.command: >-
+        kubectl exec -n {{ cluster_recovery_verify_monitoring_namespace }}
+        {{ cluster_recovery_verify_observability_smoke_pod }}
+        --kubeconfig={{ kubeconfig_local_path }} --
+        wget -qO- http://grafana.{{ cluster_recovery_verify_monitoring_namespace }}.svc.cluster.local:3000/api/health
+      register: cluster_recovery_verify_grafana_health
+      changed_when: false
+      retries: 10
+      delay: 5
+      until: '"ok" in cluster_recovery_verify_grafana_health.stdout'
+      delegate_to: localhost
+      when: "'grafana' in (cluster_recovery_verify_monitoring_deployment_names | default([]))"
+  always:
+    - name: Remove observability smoke pod
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "{{ cluster_recovery_verify_observability_smoke_pod }}"
+        namespace: "{{ cluster_recovery_verify_monitoring_namespace }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      failed_when: false
+      delegate_to: localhost
+      when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names

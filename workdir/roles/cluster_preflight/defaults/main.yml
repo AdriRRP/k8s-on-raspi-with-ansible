@@ -1,0 +1,9 @@
+---
+kubeconfig_local_path: /home/ansible/.kube/config
+preflight_require_kubeconfig: true
+preflight_require_storage_class: false
+preflight_storage_class_name: ""
+preflight_require_loadbalancer_support: false
+preflight_metallb_namespace: metallb-system
+preflight_require_registry_lb_ip: false
+preflight_registry_lb_ip: ""

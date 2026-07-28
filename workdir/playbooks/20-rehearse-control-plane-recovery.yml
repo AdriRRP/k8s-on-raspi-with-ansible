@@ -1,0 +1,10 @@
+---
+- name: Rehearse control-plane recovery from a captured bundle
+  hosts: master
+  become: true
+  gather_facts: true
+
+  roles:
+    - role: control_plane_recovery_restore
+      vars:
+        control_plane_restore_mode: validate

@@ -1,0 +1,72 @@
+---
+- name: Validate recovery network selector is configured
+  ansible.builtin.assert:
+    that:
+      - >-
+        (recovery_seed_interface_mac | default('') | trim | length) > 0
+        or (recovery_seed_interface_name | default('') | trim | length) > 0
+    fail_msg: >-
+      Define either recovery_seed_interface_mac or recovery_seed_interface_name
+      before rendering recovery cloud-init seeds for {{ inventory_hostname }}.
+  delegate_to: localhost
+  become: false
+
+- name: Validate static recovery seeds have an explicit inventory address
+  ansible.builtin.assert:
+    that:
+      - ansible_host is defined
+      - ansible_host | string | trim | length > 0
+    fail_msg: >-
+      Static recovery seeds require ansible_host to be defined for
+      {{ inventory_hostname }} so the node comes back with the expected IP.
+  when: recovery_seed_network_mode == 'static'
+  delegate_to: localhost
+  become: false
+
+- name: Ensure local recovery seed root exists
+  ansible.builtin.file:
+    path: "{{ recovery_seed_local_root }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Ensure per-node recovery seed directory exists
+  ansible.builtin.file:
+    path: "{{ recovery_seed_local_root }}/{{ inventory_hostname }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Render recovery cloud-init user-data
+  ansible.builtin.template:
+    src: user-data.j2
+    dest: "{{ recovery_seed_local_root }}/{{ inventory_hostname }}/user-data"
+    mode: '0600'
+  delegate_to: localhost
+  become: false
+
+- name: Render recovery cloud-init meta-data
+  ansible.builtin.template:
+    src: meta-data.j2
+    dest: "{{ recovery_seed_local_root }}/{{ inventory_hostname }}/meta-data"
+    mode: '0644'
+  delegate_to: localhost
+  become: false
+
+- name: Render recovery cloud-init network-config
+  ansible.builtin.template:
+    src: network-config.j2
+    dest: "{{ recovery_seed_local_root }}/{{ inventory_hostname }}/network-config"
+    mode: '0644'
+  delegate_to: localhost
+  become: false
+
+- name: Render recovery seed instructions
+  ansible.builtin.template:
+    src: README.txt.j2
+    dest: "{{ recovery_seed_local_root }}/{{ inventory_hostname }}/README.txt"
+    mode: '0644'
+  delegate_to: localhost
+  become: false

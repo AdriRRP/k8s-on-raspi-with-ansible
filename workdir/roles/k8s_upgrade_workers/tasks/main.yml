@@ -1,0 +1,409 @@
+---
+- name: Derive worker upgrade execution flags
+  ansible.builtin.set_fact:
+    worker_apply_changes: "{{ upgrade_execution_mode == 'apply' }}"
+    worker_release_upgrade_os: >-
+      {{
+        upgrade_execution_mode == 'apply'
+        and upgrade_maintenance_scope in ['cluster', 'os']
+        and upgrade_os_release_nodes | bool
+        and ansible_distribution_version is version(
+          (
+            hostvars['localhost'].upgrade_effective_target_os_version
+            | default(upgrade_target_os_version)
+          ),
+          '<'
+        )
+      }}
+    worker_patch_os: >-
+      {{
+        upgrade_execution_mode == 'apply'
+        and upgrade_maintenance_scope in ['cluster', 'os']
+        and upgrade_os_patch_nodes | bool
+        and not upgrade_os_release_nodes | bool
+      }}
+    worker_upgrade_kubernetes: >-
+      {{
+        upgrade_execution_mode == 'apply'
+        and upgrade_maintenance_scope in ['cluster', 'kubernetes']
+      }}
+    worker_target_kubernetes_version: >-
+      {{
+        hostvars['localhost'].upgrade_effective_target_kubernetes_version
+        | default(upgrade_target_kubernetes_version)
+      }}
+    worker_target_kubernetes_deb_revision: >-
+      {{
+        hostvars['localhost'].upgrade_effective_target_kubernetes_deb_revision
+        | default(upgrade_target_kubernetes_deb_revision)
+      }}
+    worker_target_os_version: >-
+      {{
+        hostvars['localhost'].upgrade_effective_target_os_version
+        | default(upgrade_target_os_version)
+      }}
+    worker_release_upgrade_prompt: >-
+      {{
+        'lts'
+        if (
+          ansible_distribution_version is match('^\\d+\\.04$')
+          and (
+            hostvars['localhost'].upgrade_effective_target_os_version
+            | default(upgrade_target_os_version)
+          ) is match('^\\d+\\.04$')
+        )
+        else 'normal'
+      }}
+
+- name: Read current Kubernetes package versions on worker node
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - -f=${Package}=${Version}\n
+      - kubeadm
+      - kubelet
+      - kubectl
+  register: worker_package_versions_raw
+  changed_when: false
+  become: true
+
+- name: Parse current Kubernetes package versions on worker node
+  ansible.builtin.set_fact:
+    worker_package_versions: >-
+      {{
+        dict(
+          worker_package_versions_raw.stdout_lines
+          | map('split', '=')
+          | map('list')
+        )
+      }}
+
+- name: Resolve worker node Kubernetes package state
+  ansible.builtin.set_fact:
+    worker_current_kubeadm_version: >-
+      {{ worker_package_versions.kubeadm | regex_replace('-.*$', '') }}
+    worker_current_kubelet_version: >-
+      {{ worker_package_versions.kubelet | regex_replace('-.*$', '') }}
+    worker_current_kubectl_version: >-
+      {{ worker_package_versions.kubectl | regex_replace('-.*$', '') }}
+    worker_upgrade_kubernetes: >-
+      {{
+        worker_upgrade_kubernetes
+        and (
+          (worker_package_versions.kubeadm | regex_replace('-.*$', '')) is version(worker_target_kubernetes_version, '<')
+          or (worker_package_versions.kubelet | regex_replace('-.*$', '')) is version(worker_target_kubernetes_version, '<')
+          or (worker_package_versions.kubectl | regex_replace('-.*$', '')) is version(worker_target_kubernetes_version, '<')
+        )
+      }}
+
+- name: Create failure diagnostics directory for worker node
+  ansible.builtin.file:
+    path: "{{ hostvars['localhost'].upgrade_failure_dir_resolved | default(upgrade_failure_dir) }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+
+- name: Report dry-run status for worker node
+  ansible.builtin.debug:
+    msg: "Dry-run mode: no worker mutations will be applied on {{ inventory_hostname }}."
+  when: not worker_apply_changes | bool
+
+- name: Upgrade worker node with rollback-safe execution
+  when: worker_apply_changes | bool
+  block:
+    - name: Ensure APT repositories are healthy before worker upgrade
+      ansible.builtin.include_role:
+        name: apt_resilience
+
+    - name: Configure target Kubernetes APT repository on worker node
+      ansible.builtin.include_role:
+        name: k8s_install
+        tasks_from: repo.yml
+      vars:
+        k8s_install_repo_minor_version: "{{ worker_target_kubernetes_version.split('.')[:2] | join('.') }}"
+      when: worker_upgrade_kubernetes | bool
+
+    - name: Cordon worker node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - cordon
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: worker_cordon
+      changed_when: "'already cordoned' not in worker_cordon.stdout"
+      delegate_to: localhost
+
+    - name: Drain worker node
+      vars:
+        worker_drain_flags:
+          - --ignore-daemonsets
+          - "--grace-period={{ upgrade_drain_grace_period }}"
+          - "--timeout={{ upgrade_drain_timeout }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['kubectl', 'drain', inventory_hostname]
+            + worker_drain_flags
+            + (['--delete-emptydir-data'] if upgrade_delete_emptydir_data | bool else [])
+            + (['--force'] if upgrade_force_drain | bool else [])
+          }}
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Patch operating system packages on worker node
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+      when: worker_patch_os | bool
+      become: true
+
+    - name: Upgrade Ubuntu release on worker node
+      ansible.builtin.include_role:
+        name: ubuntu_release_upgrade
+      vars:
+        ubuntu_release_upgrade_target_version: "{{ worker_target_os_version }}"
+        ubuntu_release_upgrade_prompt: "{{ worker_release_upgrade_prompt }}"
+      when: worker_release_upgrade_os | bool
+
+    - name: Check whether worker node requires reboot after OS patching
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: worker_reboot_required
+      when: worker_patch_os | bool
+      become: true
+
+    - name: Reboot worker node after OS patching
+      ansible.builtin.include_role:
+        name: safe_reboot
+      vars:
+        safe_reboot_timeout: 1800
+        safe_reboot_connect_timeout: 10
+      when:
+        - worker_patch_os | bool
+        - upgrade_reboot_after_os_patch | bool
+        - worker_reboot_required.stat.exists
+
+    - name: Remove package hold for Kubernetes components on worker node
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+      when: worker_upgrade_kubernetes | bool
+      become: true
+
+    - name: Install target kubeadm version on worker node
+      ansible.builtin.apt:
+        name:
+          - "kubeadm={{ worker_target_kubernetes_version }}-{{ worker_target_kubernetes_deb_revision }}"
+        state: present
+        allow_downgrade: true
+        update_cache: true
+      when: worker_upgrade_kubernetes | bool
+      become: true
+
+    - name: Apply kubeadm node upgrade on worker node
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - upgrade
+          - node
+      when: worker_upgrade_kubernetes | bool
+      register: worker_kubeadm_upgrade
+      changed_when: true
+      become: true
+
+    - name: Install target kubelet and kubectl versions on worker node
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ worker_target_kubernetes_version }}-{{ worker_target_kubernetes_deb_revision }}"
+          - "kubectl={{ worker_target_kubernetes_version }}-{{ worker_target_kubernetes_deb_revision }}"
+        state: present
+        allow_downgrade: true
+      when: worker_upgrade_kubernetes | bool
+      become: true
+
+    - name: Re-apply package hold for Kubernetes components on worker node
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+      when: worker_upgrade_kubernetes | bool
+      become: true
+
+    - name: Restart kubelet on worker node
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+        enabled: true
+      when: worker_upgrade_kubernetes | bool
+      become: true
+
+    - name: Wait until upgraded worker node is Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ inventory_hostname }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      register: upgraded_worker_node
+      retries: 30
+      delay: 10
+      failed_when: false
+      until:
+        - (upgraded_worker_node.resources | default([]) | length) > 0
+        - >-
+          (
+            ((upgraded_worker_node.resources | default([]) | first | default({})).status.conditions | default([]))
+            | selectattr('type', 'equalto', 'Ready')
+            | selectattr('status', 'equalto', 'True')
+            | list
+            | length
+          ) == 1
+        - >-
+          not worker_upgrade_kubernetes
+          or (
+            (
+              (
+                upgraded_worker_node.resources
+                | default([])
+                | first
+                | default({})
+              ).status.nodeInfo
+              | default({})
+            ).kubeletVersion
+            | default('')
+            == ('v' ~ worker_target_kubernetes_version)
+          )
+      delegate_to: localhost
+      changed_when: false
+
+  rescue:
+    - name: Capture worker node description
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - describe
+          - node
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: worker_node_describe
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Capture workloads scheduled on failed worker node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - pods
+          - --all-namespaces
+          - --field-selector=spec.nodeName={{ inventory_hostname }}
+          - -o
+          - wide
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: worker_node_pods
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Capture kubelet journal from failed worker node
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - -u
+          - kubelet
+          - -n
+          - "200"
+          - --no-pager
+      register: worker_kubelet_journal
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Persist worker failure diagnostics
+      ansible.builtin.copy:
+        dest: >-
+          {{
+            hostvars['localhost'].upgrade_failure_dir_resolved
+            | default(upgrade_failure_dir)
+          }}/{{ inventory_hostname }}/diagnostics.json
+        mode: "0640"
+        content: |
+          {{
+            {
+              'node': inventory_hostname,
+              'scope': upgrade_maintenance_scope,
+              'execution_mode': upgrade_execution_mode,
+              'previous_package_versions': worker_package_versions,
+              'node_describe': worker_node_describe.stdout | default(''),
+              'scheduled_pods': worker_node_pods.stdout | default(''),
+              'kubelet_journal': worker_kubelet_journal.stdout | default('')
+            } | to_nice_json
+          }}
+      delegate_to: localhost
+
+    - name: Persist worker rollback instructions
+      ansible.builtin.copy:
+        dest: >-
+          {{
+            hostvars['localhost'].upgrade_failure_dir_resolved
+            | default(upgrade_failure_dir)
+          }}/{{ inventory_hostname }}/rollback-instructions.txt
+        mode: "0640"
+        content: |
+          Worker upgrade failed on {{ inventory_hostname }}.
+
+          Previous package versions:
+          kubeadm={{ worker_package_versions.kubeadm | default('unknown') }}
+          kubelet={{ worker_package_versions.kubelet | default('unknown') }}
+          kubectl={{ worker_package_versions.kubectl | default('unknown') }}
+
+          Recommended rollback path:
+          1. Inspect diagnostics.json in the same directory.
+          2. Remove package holds if necessary.
+          3. Reinstall the previous package set shown above.
+          4. Restart kubelet and wait for the node to return to Ready.
+          5. Re-run the upgrade only after this node is stable.
+      delegate_to: localhost
+
+    - name: Attempt to uncordon failed worker node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - uncordon
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Abort worker upgrade after failure
+      ansible.builtin.fail:
+        msg: >-
+          Worker upgrade failed on {{ inventory_hostname }}.
+          Diagnostics and rollback instructions were written to
+          {{ hostvars['localhost'].upgrade_failure_dir_resolved | default(upgrade_failure_dir) }}/{{ inventory_hostname }}.
+
+  always:
+    - name: Ensure worker node is schedulable when healthy
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - uncordon
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: worker_uncordon
+      changed_when: "'already uncordoned' not in worker_uncordon.stdout"
+      failed_when: false
+      when: worker_apply_changes | bool
+      delegate_to: localhost

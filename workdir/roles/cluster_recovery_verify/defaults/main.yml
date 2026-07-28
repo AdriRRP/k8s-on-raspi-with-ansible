@@ -1,0 +1,12 @@
+---
+kubeconfig_local_path: /home/ansible/.kube/config
+cluster_recovery_verify_monitoring_namespace: "monitoring"
+cluster_recovery_verify_registry_namespace: "registry"
+cluster_recovery_verify_registry_name: "registry"
+cluster_recovery_verify_nfs_namespace: "nfs-storage"
+cluster_recovery_verify_metallb_namespace: "metallb-system"
+cluster_recovery_verify_observability_smoke_pod: recovery-observability-smoke
+cluster_recovery_verify_monitoring_deployments:
+  - prometheus
+  - grafana
+  - kube-state-metrics

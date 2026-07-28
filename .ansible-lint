@@ -1,0 +1,10 @@
+---
+profile: production
+offline: true
+exclude_paths:
+  - config/
+use_default_rules: true
+# Shared public variables predate role-prefix enforcement. Renaming them safely
+# requires a dedicated compatibility migration across inventories and playbooks.
+skip_list:
+  - var-naming

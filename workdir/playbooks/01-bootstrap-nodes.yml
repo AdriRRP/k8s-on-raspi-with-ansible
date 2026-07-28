@@ -1,13 +1,20 @@
+---
 # Step 1: Add known_hosts entries BEFORE trying to connect
 - name: Ensure node host keys are trusted
   hosts: localhost
   gather_facts: false
   tasks:
+    - name: Ensure local SSH directory exists
+      ansible.builtin.file:
+        path: /home/ansible/.ssh
+        state: directory
+        mode: "0700"
+
     - name: Scan and add each node to known_hosts
-      ansible.builtin.lineinfile:
+      ansible.builtin.known_hosts:
+        name: "{{ hostvars[item].ansible_host }}"
+        key: "{{ lookup('pipe', 'ssh-keyscan -H ' + hostvars[item].ansible_host) }}"
         path: /home/ansible/.ssh/known_hosts
-        line: "{{ lookup('pipe', 'ssh-keyscan -H ' + hostvars[item].ansible_host) }}"
-        create: yes
         state: present
       loop: "{{ groups['all'] }}"
       when: hostvars[item].ansible_host is defined
@@ -21,4 +28,4 @@
 
   roles:
     - role: common
-    - role: user-management
+    - role: user_management

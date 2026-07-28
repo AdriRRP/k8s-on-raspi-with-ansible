@@ -1,0 +1,45 @@
+---
+- name: Create temporary mount point for test
+  ansible.builtin.file:
+    path: /mnt/test-nfs
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Mount NFS export for test
+  ansible.posix.mount:
+    path: /mnt/test-nfs
+    src: "{{ hostvars[groups['master'] | first].ansible_host }}:{{ nfs_export_mount }}"
+    fstype: nfs
+    opts: vers=4
+    state: mounted
+  become: true
+
+- name: Write test file to NFS mount
+  ansible.builtin.copy:
+    content: "NFS test successful from {{ inventory_hostname }}"
+    dest: /mnt/test-nfs/nfs-test-{{ inventory_hostname }}.txt
+    mode: '0644'
+  become: true
+
+- name: Read test file from NFS mount
+  ansible.builtin.command: cat /mnt/test-nfs/nfs-test-{{ inventory_hostname }}.txt
+  register: nfs_test_output
+  become: true
+  changed_when: false
+
+- name: Show test result
+  ansible.builtin.debug:
+    msg: "{{ nfs_test_output.stdout }}"
+
+- name: Unmount test NFS mount
+  ansible.posix.mount:
+    path: /mnt/test-nfs
+    state: absent
+  become: true
+
+- name: Remove temporary mount point
+  ansible.builtin.file:
+    path: /mnt/test-nfs
+    state: absent
+  become: true

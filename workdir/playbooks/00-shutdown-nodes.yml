@@ -1,3 +1,4 @@
+---
 - name: Shutdown all Raspberry Pi nodes
   hosts: cluster
   become: true
@@ -8,4 +9,5 @@
       ansible.builtin.command: shutdown -h now
       async: 0
       poll: 0
-      ignore_errors: true
+      changed_when: true
+      failed_when: false

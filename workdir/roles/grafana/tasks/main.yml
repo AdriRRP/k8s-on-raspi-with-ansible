@@ -1,3 +1,19 @@
-- import_tasks: datasource.yml
-- import_tasks: deploy.yml
-- import_tasks: dashboards-api.yml
+---
+- name: Validate Grafana administrator credentials
+  ansible.builtin.assert:
+    that:
+      - grafana_admin_user | length > 0
+      - grafana_admin_password | length >= 16
+    fail_msg: >-
+      Set a non-empty Grafana admin user and a password of at least 16 characters.
+  no_log: true
+
+- name: Include Grafana datasource provisioning tasks
+  ansible.builtin.import_tasks: datasource.yml
+
+- name: Include Grafana dashboard provisioning tasks
+  ansible.builtin.import_tasks: dashboards.yml
+  when: grafana_provision_bundled_dashboards | bool
+
+- name: Include Grafana deployment tasks
+  ansible.builtin.import_tasks: deploy.yml

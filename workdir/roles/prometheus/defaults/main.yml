@@ -1,5 +1,9 @@
+---
 kubeconfig_local_path: /home/ansible/.kube/config
 monitoring_namespace: monitoring
 storage_class_name: raspi-nfs-provisioner
+prometheus_image: "{{ platform_release_catalog.observability.prometheus_image }}"
+prometheus_service_type: ClusterIP
 prometheus_pvc_size: 10Gi
 prometheus_retention_time: 7d
+prometheus_runtime_node_name: ""

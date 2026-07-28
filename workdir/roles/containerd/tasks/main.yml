@@ -1,18 +1,30 @@
+---
 - name: Detect target architecture and normalize
-  set_fact:
+  ansible.builtin.set_fact:
     arch: >-
       {{ 'arm64' if ansible_architecture in ['aarch64', 'armv8l'] else
          'amd64' if ansible_architecture in ['x86_64'] else
          ansible_architecture }}
 
+- name: Validate runtime artifact support for target architecture
+  ansible.builtin.assert:
+    that:
+      - arch in containerd_checksums
+      - arch in runc_checksums
+      - arch in cni_plugins_checksums
+    fail_msg: "No verified runtime artifacts are configured for architecture {{ arch }}."
+
 - name: Set derived download URLs based on architecture
-  set_fact:
+  ansible.builtin.set_fact:
     containerd_url: "{{ containerd_base_url }}/containerd-{{ containerd_version }}-linux-{{ arch }}.tar.gz"
+    containerd_checksum: "sha256:{{ containerd_checksums[arch] }}"
     runc_url: "{{ runc_url_base }}/runc.{{ arch }}"
+    runc_checksum: "sha256:{{ runc_checksums[arch] }}"
     cni_plugins_url: "{{ cni_plugins_url_base }}/cni-plugins-linux-{{ arch }}-v{{ cni_plugins_version }}.tgz"
+    cni_plugins_checksum: "sha256:{{ cni_plugins_checksums[arch] }}"
 
 - name: Create required directories
-  file:
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
     mode: '0755'
@@ -21,106 +33,188 @@
     - /usr/local/bin
     - /usr/local/sbin
     - /etc/containerd
+    - "{{ containerd_version_marker_dir }}"
   become: true
 
+- name: Read installed containerd version marker
+  ansible.builtin.command:
+    argv:
+      - cat
+      - "{{ containerd_version_marker_dir }}/containerd"
+  register: containerd_installed_version
+  changed_when: false
+  failed_when: false
+
+- name: Read installed runc version marker
+  ansible.builtin.command:
+    argv:
+      - cat
+      - "{{ containerd_version_marker_dir }}/runc"
+  register: runc_installed_version
+  changed_when: false
+  failed_when: false
+
+- name: Read installed CNI plugins version marker
+  ansible.builtin.command:
+    argv:
+      - cat
+      - "{{ containerd_version_marker_dir }}/cni-plugins"
+  register: cni_plugins_installed_version
+  changed_when: false
+  failed_when: false
+
+- name: Derive runtime installation requirements
+  ansible.builtin.set_fact:
+    containerd_install_required: >-
+      {{ containerd_installed_version.stdout | trim != containerd_version }}
+    runc_install_required: >-
+      {{ runc_installed_version.stdout | trim != runc_version }}
+    cni_plugins_install_required: >-
+      {{ cni_plugins_installed_version.stdout | trim != cni_plugins_version }}
+
 - name: Download containerd archive
-  get_url:
+  ansible.builtin.get_url:
     url: "{{ containerd_url }}"
     dest: "/tmp/containerd.tar.gz"
+    checksum: "{{ containerd_checksum }}"
     mode: '0644'
+  when: containerd_install_required
   become: true
 
 - name: Extract containerd binaries
-  unarchive:
+  ansible.builtin.unarchive:
     src: "/tmp/containerd.tar.gz"
     dest: "/usr/local"
     remote_src: true
+  when: containerd_install_required
+  notify: Restart containerd
   become: true
 
 - name: Download runc binary
-  get_url:
+  ansible.builtin.get_url:
     url: "{{ runc_url }}"
     dest: "/usr/local/sbin/runc"
+    checksum: "{{ runc_checksum }}"
     mode: '0755'
+  when: runc_install_required
+  notify: Restart containerd
   become: true
 
 - name: Download CNI plugins
-  get_url:
+  ansible.builtin.get_url:
     url: "{{ cni_plugins_url }}"
     dest: "/tmp/cni-plugins.tgz"
+    checksum: "{{ cni_plugins_checksum }}"
     mode: '0644'
+  when: cni_plugins_install_required
   become: true
 
 - name: Extract CNI plugins
-  unarchive:
+  ansible.builtin.unarchive:
     src: "/tmp/cni-plugins.tgz"
     dest: /opt/cni/bin
     remote_src: true
+  when: cni_plugins_install_required
+  become: true
+
+- name: Record installed runtime component versions
+  ansible.builtin.copy:
+    dest: "{{ containerd_version_marker_dir }}/{{ item.name }}"
+    content: "{{ item.version }}\n"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - name: containerd
+      version: "{{ containerd_version }}"
+      required: "{{ containerd_install_required }}"
+    - name: runc
+      version: "{{ runc_version }}"
+      required: "{{ runc_install_required }}"
+    - name: cni-plugins
+      version: "{{ cni_plugins_version }}"
+      required: "{{ cni_plugins_install_required }}"
+  when: item.required | bool
+  become: true
+
+- name: Remove downloaded runtime archives after extraction
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/containerd.tar.gz
+    - /tmp/cni-plugins.tgz
   become: true
 
 - name: Download containerd.service file
-  get_url:
+  ansible.builtin.get_url:
     url: "{{ containerd_service_url }}"
     dest: "/usr/lib/systemd/system/containerd.service"
+    checksum: "sha256:{{ containerd_service_checksum }}"
     mode: '0644'
+  notify: Restart containerd
   become: true
 
 - name: Reload systemd daemon
-  systemd:
+  ansible.builtin.systemd:
     daemon_reload: true
   become: true
 
-- name: Enable and start containerd
-  systemd:
-    name: containerd
-    enabled: true
-    state: started
-  become: true
-
 - name: Generate default containerd config
-  shell: containerd config default > /etc/containerd/config.toml
+  ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
   args:
     creates: /etc/containerd/config.toml
   environment:
     PATH: "/usr/local/bin:/usr/local/sbin:{{ ansible_env.PATH }}"
+  notify: Restart containerd
   become: true
 
 - name: Set SystemdCgroup = true in config.toml
-  replace:
+  ansible.builtin.replace:
     path: /etc/containerd/config.toml
     regexp: 'SystemdCgroup\s*=\s*false'
     replace: 'SystemdCgroup = true'
+  notify: Restart containerd
   become: true
 
 - name: Set sandbox (pause) image
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/containerd/config.toml
     regexp: '^(\s*)sandbox_image\s*='
     line: '\1sandbox_image = "{{ pause_image }}"'
     insertafter: '^\[plugins."io.containerd.grpc.v1.cri"\]'
     backrefs: true
+  notify: Restart containerd
   become: true
 
 - name: Check if disabled_plugins is present in config.toml
-  slurp:
+  ansible.builtin.slurp:
     src: /etc/containerd/config.toml
   register: config_toml_raw
   become: true
 
 - name: Set fact if disabled_plugins line is present
-  set_fact:
-    has_disabled_plugins: "{{ (config_toml_raw.content | b64decode).splitlines() | select('match', '^\\s*disabled_plugins\\s*=') | list | length > 0 }}"
+  ansible.builtin.set_fact:
+    has_disabled_plugins: >-
+      {{
+        (config_toml_raw.content | b64decode).splitlines()
+        | select('match', '^\\s*disabled_plugins\\s*=')
+        | list
+        | length > 0
+      }}
 
 - name: Ensure CRI plugin is enabled
-  replace:
+  ansible.builtin.replace:
     path: /etc/containerd/config.toml
     regexp: 'disabled_plugins\s*=.+cri.*'
     replace: '# disabled_plugins = []'
   when: has_disabled_plugins
+  notify: Restart containerd
   become: true
 
-- name: Restart containerd to apply config changes
-  systemd:
+- name: Enable and start containerd
+  ansible.builtin.systemd:
     name: containerd
-    state: restarted
+    enabled: true
+    state: started
   become: true

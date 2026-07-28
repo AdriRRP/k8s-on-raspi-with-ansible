@@ -1,0 +1,428 @@
+---
+- name: Derive control-plane upgrade execution flags
+  ansible.builtin.set_fact:
+    control_plane_apply_changes: "{{ upgrade_execution_mode == 'apply' }}"
+    control_plane_release_upgrade_os: >-
+      {{
+        upgrade_execution_mode == 'apply'
+        and upgrade_maintenance_scope in ['cluster', 'os']
+        and upgrade_os_release_nodes | bool
+        and ansible_distribution_version is version(
+          (
+            hostvars['localhost'].upgrade_effective_target_os_version
+            | default(upgrade_target_os_version)
+          ),
+          '<'
+        )
+      }}
+    control_plane_patch_os: >-
+      {{
+        upgrade_execution_mode == 'apply'
+        and upgrade_maintenance_scope in ['cluster', 'os']
+        and upgrade_os_patch_nodes | bool
+        and not upgrade_os_release_nodes | bool
+      }}
+    control_plane_upgrade_kubernetes: >-
+      {{
+        upgrade_execution_mode == 'apply'
+        and upgrade_maintenance_scope in ['cluster', 'kubernetes']
+      }}
+    control_plane_target_kubernetes_version: >-
+      {{
+        hostvars['localhost'].upgrade_effective_target_kubernetes_version
+        | default(upgrade_target_kubernetes_version)
+      }}
+    control_plane_target_kubernetes_deb_revision: >-
+      {{
+        hostvars['localhost'].upgrade_effective_target_kubernetes_deb_revision
+        | default(upgrade_target_kubernetes_deb_revision)
+      }}
+    control_plane_target_os_version: >-
+      {{
+        hostvars['localhost'].upgrade_effective_target_os_version
+        | default(upgrade_target_os_version)
+      }}
+    control_plane_release_upgrade_prompt: >-
+      {{
+        'lts'
+        if (
+          ansible_distribution_version is match('^\\d+\\.04$')
+          and (
+            hostvars['localhost'].upgrade_effective_target_os_version
+            | default(upgrade_target_os_version)
+          ) is match('^\\d+\\.04$')
+        )
+        else 'normal'
+      }}
+
+- name: Read current Kubernetes package versions on control-plane node
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - -f=${Package}=${Version}\n
+      - kubeadm
+      - kubelet
+      - kubectl
+  register: control_plane_package_versions_raw
+  changed_when: false
+  become: true
+
+- name: Parse current Kubernetes package versions on control-plane node
+  ansible.builtin.set_fact:
+    control_plane_package_versions: >-
+      {{
+        dict(
+          control_plane_package_versions_raw.stdout_lines
+          | map('split', '=')
+          | map('list')
+        )
+      }}
+
+- name: Resolve control-plane node Kubernetes package state
+  ansible.builtin.set_fact:
+    control_plane_current_kubeadm_version: >-
+      {{ control_plane_package_versions.kubeadm | regex_replace('-.*$', '') }}
+    control_plane_current_kubelet_version: >-
+      {{ control_plane_package_versions.kubelet | regex_replace('-.*$', '') }}
+    control_plane_current_kubectl_version: >-
+      {{ control_plane_package_versions.kubectl | regex_replace('-.*$', '') }}
+    control_plane_upgrade_kubernetes: >-
+      {{
+        control_plane_upgrade_kubernetes
+        and (
+          (control_plane_package_versions.kubeadm | regex_replace('-.*$', '')) is version(control_plane_target_kubernetes_version, '<')
+          or (control_plane_package_versions.kubelet | regex_replace('-.*$', '')) is version(control_plane_target_kubernetes_version, '<')
+          or (control_plane_package_versions.kubectl | regex_replace('-.*$', '')) is version(control_plane_target_kubernetes_version, '<')
+        )
+      }}
+
+- name: Create failure diagnostics directory for control-plane node
+  ansible.builtin.file:
+    path: "{{ hostvars['localhost'].upgrade_failure_dir_resolved | default(upgrade_failure_dir) }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+
+- name: Report dry-run status for control-plane node
+  ansible.builtin.debug:
+    msg: "Dry-run mode: no control-plane mutations will be applied on {{ inventory_hostname }}."
+  when: not control_plane_apply_changes | bool
+
+- name: Upgrade control-plane node with rollback-safe execution
+  when: control_plane_apply_changes | bool
+  block:
+    - name: Ensure APT repositories are healthy before control-plane upgrade
+      ansible.builtin.include_role:
+        name: apt_resilience
+
+    - name: Configure target Kubernetes APT repository on control-plane node
+      ansible.builtin.include_role:
+        name: k8s_install
+        tasks_from: repo.yml
+      vars:
+        k8s_install_repo_minor_version: "{{ control_plane_target_kubernetes_version.split('.')[:2] | join('.') }}"
+      when: control_plane_upgrade_kubernetes | bool
+
+    - name: Cordon control-plane node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - cordon
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: control_plane_cordon
+      changed_when: "'already cordoned' not in control_plane_cordon.stdout"
+      delegate_to: localhost
+
+    - name: Drain control-plane node
+      vars:
+        control_plane_drain_flags:
+          - --ignore-daemonsets
+          - "--grace-period={{ upgrade_drain_grace_period }}"
+          - "--timeout={{ upgrade_drain_timeout }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      ansible.builtin.command:
+        argv: >-
+          {{
+            ['kubectl', 'drain', inventory_hostname]
+            + control_plane_drain_flags
+            + (['--delete-emptydir-data'] if upgrade_delete_emptydir_data | bool else [])
+            + (['--force'] if upgrade_force_drain | bool else [])
+          }}
+      changed_when: true
+      delegate_to: localhost
+
+    - name: Patch operating system packages on control-plane node
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+      when: control_plane_patch_os | bool
+      become: true
+
+    - name: Upgrade Ubuntu release on control-plane node
+      ansible.builtin.include_role:
+        name: ubuntu_release_upgrade
+      vars:
+        ubuntu_release_upgrade_target_version: "{{ control_plane_target_os_version }}"
+        ubuntu_release_upgrade_prompt: "{{ control_plane_release_upgrade_prompt }}"
+      when: control_plane_release_upgrade_os | bool
+
+    - name: Check whether control-plane node requires reboot after OS patching
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: control_plane_reboot_required
+      when: control_plane_patch_os | bool
+      become: true
+
+    - name: Reboot control-plane node after OS patching
+      ansible.builtin.include_role:
+        name: safe_reboot
+      vars:
+        safe_reboot_timeout: 1800
+        safe_reboot_connect_timeout: 10
+      when:
+        - control_plane_patch_os | bool
+        - upgrade_reboot_after_os_patch | bool
+        - control_plane_reboot_required.stat.exists
+
+    - name: Remove package hold for Kubernetes components on control-plane node
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+      when: control_plane_upgrade_kubernetes | bool
+      become: true
+
+    - name: Install target kubeadm version on control-plane node
+      ansible.builtin.apt:
+        name:
+          - "kubeadm={{ control_plane_target_kubernetes_version }}-{{ control_plane_target_kubernetes_deb_revision }}"
+        state: present
+        allow_downgrade: true
+        update_cache: true
+      when: control_plane_upgrade_kubernetes | bool
+      become: true
+
+    - name: Apply kubeadm upgrade on the primary control-plane node
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - upgrade
+          - apply
+          - "v{{ control_plane_target_kubernetes_version }}"
+          - -y
+      when:
+        - control_plane_upgrade_kubernetes | bool
+        - inventory_hostname == groups['control_plane'][0]
+      register: kubeadm_upgrade_apply
+      changed_when: true
+      become: true
+
+    - name: Upgrade secondary control-plane node state
+      ansible.builtin.command:
+        argv:
+          - kubeadm
+          - upgrade
+          - node
+      when:
+        - control_plane_upgrade_kubernetes | bool
+        - inventory_hostname != groups['control_plane'][0]
+      register: kubeadm_upgrade_node
+      changed_when: true
+      become: true
+
+    - name: Install target kubelet and kubectl versions on control-plane node
+      ansible.builtin.apt:
+        name:
+          - "kubelet={{ control_plane_target_kubernetes_version }}-{{ control_plane_target_kubernetes_deb_revision }}"
+          - "kubectl={{ control_plane_target_kubernetes_version }}-{{ control_plane_target_kubernetes_deb_revision }}"
+        state: present
+        allow_downgrade: true
+      when: control_plane_upgrade_kubernetes | bool
+      become: true
+
+    - name: Re-apply package hold for Kubernetes components on control-plane node
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+      when: control_plane_upgrade_kubernetes | bool
+      become: true
+
+    - name: Restart kubelet on control-plane node
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+        enabled: true
+      when: control_plane_upgrade_kubernetes | bool
+      become: true
+
+    - name: Wait until upgraded control-plane node is Ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ inventory_hostname }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      register: upgraded_control_plane_node
+      retries: 30
+      delay: 10
+      failed_when: false
+      until:
+        - (upgraded_control_plane_node.resources | default([]) | length) > 0
+        - >-
+          (
+            ((upgraded_control_plane_node.resources | default([]) | first | default({})).status.conditions | default([]))
+            | selectattr('type', 'equalto', 'Ready')
+            | selectattr('status', 'equalto', 'True')
+            | list
+            | length
+          ) == 1
+        - >-
+          not control_plane_upgrade_kubernetes
+          or (
+            (
+              (
+                upgraded_control_plane_node.resources
+                | default([])
+                | first
+                | default({})
+              ).status.nodeInfo
+              | default({})
+            ).kubeletVersion
+            | default('')
+            == ('v' ~ control_plane_target_kubernetes_version)
+          )
+      delegate_to: localhost
+      changed_when: false
+
+  rescue:
+    - name: Capture control-plane node description
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - describe
+          - node
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: control_plane_node_describe
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Capture workloads scheduled on failed control-plane node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - pods
+          - --all-namespaces
+          - --field-selector=spec.nodeName={{ inventory_hostname }}
+          - -o
+          - wide
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: control_plane_node_pods
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Capture kubelet journal from failed control-plane node
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - -u
+          - kubelet
+          - -n
+          - "200"
+          - --no-pager
+      register: control_plane_kubelet_journal
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Persist control-plane failure diagnostics
+      ansible.builtin.copy:
+        dest: >-
+          {{
+            hostvars['localhost'].upgrade_failure_dir_resolved
+            | default(upgrade_failure_dir)
+          }}/{{ inventory_hostname }}/diagnostics.json
+        mode: "0640"
+        content: |
+          {{
+            {
+              'node': inventory_hostname,
+              'scope': upgrade_maintenance_scope,
+              'execution_mode': upgrade_execution_mode,
+              'previous_package_versions': control_plane_package_versions,
+              'node_describe': control_plane_node_describe.stdout | default(''),
+              'scheduled_pods': control_plane_node_pods.stdout | default(''),
+              'kubelet_journal': control_plane_kubelet_journal.stdout | default('')
+            } | to_nice_json
+          }}
+      delegate_to: localhost
+
+    - name: Persist control-plane rollback instructions
+      ansible.builtin.copy:
+        dest: >-
+          {{
+            hostvars['localhost'].upgrade_failure_dir_resolved
+            | default(upgrade_failure_dir)
+          }}/{{ inventory_hostname }}/rollback-instructions.txt
+        mode: "0640"
+        content: |
+          Control-plane upgrade failed on {{ inventory_hostname }}.
+
+          Previous package versions:
+          kubeadm={{ control_plane_package_versions.kubeadm | default('unknown') }}
+          kubelet={{ control_plane_package_versions.kubelet | default('unknown') }}
+          kubectl={{ control_plane_package_versions.kubectl | default('unknown') }}
+
+          Automatic package rollback is intentionally disabled for control-plane nodes,
+          because kubeadm control-plane downgrades are not considered a safe generic path.
+
+          Recommended next actions:
+          1. Inspect diagnostics.json in the same directory.
+          2. Validate API server, etcd and kubelet health on {{ inventory_hostname }}.
+          3. If needed, reinstall the previous package set manually and restore control-plane health before continuing.
+          4. Do not proceed with additional node upgrades until this node is healthy again.
+      delegate_to: localhost
+
+    - name: Attempt to uncordon failed control-plane node
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - uncordon
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      changed_when: false
+      failed_when: false
+      delegate_to: localhost
+
+    - name: Abort control-plane upgrade after failure
+      ansible.builtin.fail:
+        msg: >-
+          Control-plane upgrade failed on {{ inventory_hostname }}.
+          Diagnostics and rollback instructions were written to
+          {{ hostvars['localhost'].upgrade_failure_dir_resolved | default(upgrade_failure_dir) }}/{{ inventory_hostname }}.
+
+  always:
+    - name: Ensure control-plane node is schedulable when healthy
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - uncordon
+          - "{{ inventory_hostname }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+      register: control_plane_uncordon
+      changed_when: "'already uncordoned' not in control_plane_uncordon.stdout"
+      failed_when: false
+      when: control_plane_apply_changes | bool
+      delegate_to: localhost

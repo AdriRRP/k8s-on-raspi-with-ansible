@@ -5,4 +5,4 @@
   gather_facts: true
 
   roles:
-    - role: k8s-join
+    - role: k8s_join

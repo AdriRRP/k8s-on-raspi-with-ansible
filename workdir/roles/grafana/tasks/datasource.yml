@@ -1,5 +1,12 @@
+---
 - name: Create ConfigMap for Grafana Prometheus datasource
   kubernetes.core.k8s:
     state: present
     definition: "{{ lookup('template', 'grafana-datasource-configmap.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Create Secret for Grafana admin credentials
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'grafana-secret.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"

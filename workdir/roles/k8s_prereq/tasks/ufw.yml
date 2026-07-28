@@ -1,0 +1,22 @@
+---
+- name: Allow trusted cluster LAN traffic through active UFW
+  community.general.ufw:
+    rule: allow
+    src: "{{ cluster_node_subnet }}"
+    comment: Raspberry Pi Kubernetes cluster LAN
+  when:
+    - ufw_installed | default(false)
+    - ufw_active | default(false)
+  become: true
+
+- name: Show current UFW rules
+  ansible.builtin.command: ufw status numbered
+  register: ufw_status_output
+  when: ufw_installed | default(false)
+  changed_when: false
+  failed_when: false
+
+- name: Display UFW summary
+  ansible.builtin.debug:
+    var: ufw_status_output.stdout_lines
+  when: ufw_status_output.stdout_lines is defined

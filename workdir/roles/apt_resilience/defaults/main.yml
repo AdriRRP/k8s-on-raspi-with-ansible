@@ -1,0 +1,3 @@
+---
+apt_resilience_enable_old_releases_fallback: true
+apt_resilience_old_releases_url: "https://old-releases.ubuntu.com/ubuntu"

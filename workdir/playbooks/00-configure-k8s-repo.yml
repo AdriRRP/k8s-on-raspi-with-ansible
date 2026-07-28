@@ -1,0 +1,21 @@
+---
+- name: Configure Kubernetes package repository on cluster nodes
+  hosts: cluster
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Ensure APT repositories are healthy first
+      ansible.builtin.include_role:
+        name: apt_resilience
+
+    - name: Configure Kubernetes repository for the requested target minor
+      ansible.builtin.include_role:
+        name: k8s_install
+        tasks_from: repo.yml
+      vars:
+        k8s_install_repo_minor_version: "{{ upgrade_target_kubernetes_version.split('.')[:2] | join('.') }}"
+
+    - name: Refresh apt cache after Kubernetes repo reconfiguration
+      ansible.builtin.apt:
+        update_cache: true

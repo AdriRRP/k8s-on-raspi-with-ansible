@@ -1,5 +1,0 @@
-- name: Allow scheduling of pods on control-plane node (remove taint)
-  command: kubectl taint nodes --all node-role.kubernetes.io/control-plane- --kubeconfig={{ kubeconfig_path }}
-  register: remove_taint
-  changed_when: "'untainted' in remove_taint.stdout"
-  failed_when: remove_taint.rc != 0 and 'not found' not in remove_taint.stderr

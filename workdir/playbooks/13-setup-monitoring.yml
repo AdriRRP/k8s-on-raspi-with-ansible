@@ -3,9 +3,14 @@
   hosts: localhost
   gather_facts: false
 
+  vars:
+    preflight_require_storage_class: true
+    preflight_storage_class_name: "{{ storage_class_name | default('raspi-nfs-provisioner') }}"
+    preflight_require_loadbalancer_support: "{{ prometheus_service_type == 'LoadBalancer' or grafana_service_type == 'LoadBalancer' }}"
+
   roles:
+    - role: cluster_preflight
     - prometheus
-    - node-exporter
-    - kube-state-metrics
+    - node_exporter
+    - kube_state_metrics
     - grafana
-   # - alertmanager

@@ -3,7 +3,8 @@
   hosts: all
   become: true
   gather_facts: true
+  serial: 1
 
   roles:
     - role: containerd
-    - role: k8s-install
+    - role: k8s_install

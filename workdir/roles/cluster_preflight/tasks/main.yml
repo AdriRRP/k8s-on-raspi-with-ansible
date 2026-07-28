@@ -1,0 +1,106 @@
+---
+- name: Check local kubeconfig file
+  ansible.builtin.stat:
+    path: "{{ kubeconfig_local_path }}"
+  register: preflight_kubeconfig
+  when: preflight_require_kubeconfig | bool
+  delegate_to: localhost
+
+- name: Fail if kubeconfig is missing
+  ansible.builtin.fail:
+    msg: >-
+      Required kubeconfig not found at {{ kubeconfig_local_path }}.
+      Run the cluster init stage first or provide a valid kubeconfig.
+  when:
+    - preflight_require_kubeconfig | bool
+    - not preflight_kubeconfig.stat.exists
+  delegate_to: localhost
+
+- name: Query available StorageClasses
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: preflight_storage_classes
+  when: preflight_require_storage_class | bool
+  delegate_to: localhost
+
+- name: Fail if required StorageClass is missing
+  ansible.builtin.fail:
+    msg: >-
+      Required StorageClass {{ preflight_storage_class_name }} is not present.
+      Deploy the NFS provisioner first or override the storage class variables.
+  when:
+    - preflight_require_storage_class | bool
+    - preflight_storage_class_name | length > 0
+    - preflight_storage_classes.resources | selectattr('metadata.name', 'equalto', preflight_storage_class_name) | list | length == 0
+  delegate_to: localhost
+
+- name: Query MetalLB namespace
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ preflight_metallb_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: preflight_metallb_namespace_info
+  when: preflight_require_loadbalancer_support | bool
+  delegate_to: localhost
+
+- name: Fail if MetalLB namespace is missing
+  ansible.builtin.fail:
+    msg: >-
+      LoadBalancer support was requested but MetalLB namespace
+      {{ preflight_metallb_namespace }} is missing.
+      Deploy MetalLB first or switch the service type back to ClusterIP.
+  when:
+    - preflight_require_loadbalancer_support | bool
+    - preflight_metallb_namespace_info.resources | length == 0
+  delegate_to: localhost
+
+- name: Query MetalLB controller pod
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ preflight_metallb_namespace }}"
+    label_selectors:
+      - component=controller
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: preflight_metallb_controller
+  when: preflight_require_loadbalancer_support | bool
+  delegate_to: localhost
+
+- name: Query MetalLB speaker pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ preflight_metallb_namespace }}"
+    label_selectors:
+      - component=speaker
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: preflight_metallb_speakers
+  when: preflight_require_loadbalancer_support | bool
+  delegate_to: localhost
+
+- name: Fail if MetalLB controller is not ready
+  ansible.builtin.fail:
+    msg: "MetalLB controller is not running and ready."
+  when:
+    - preflight_require_loadbalancer_support | bool
+    - preflight_metallb_controller.resources | length == 0 or preflight_metallb_controller.resources[0].status.phase != "Running"
+  delegate_to: localhost
+
+- name: Fail if no MetalLB speaker pods are running
+  ansible.builtin.fail:
+    msg: "MetalLB speakers are not running."
+  when:
+    - preflight_require_loadbalancer_support | bool
+    - preflight_metallb_speakers.resources | length == 0
+  delegate_to: localhost
+
+- name: Fail if a registry LoadBalancer IP is required but missing
+  ansible.builtin.fail:
+    msg: "Registry LoadBalancer exposure requires a non-empty registry_lb_ip."
+  when:
+    - preflight_require_registry_lb_ip | bool
+    - preflight_registry_lb_ip | length == 0
+  delegate_to: localhost

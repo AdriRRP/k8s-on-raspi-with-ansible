@@ -6,7 +6,8 @@ metadata:
 spec:
   selector:
     app: prometheus
-  type: LoadBalancer
+  type: {{ prometheus_service_type }}
   ports:
-    - port: 9090
-      targetPort: 9090
+    - name: http
+      port: 9090
+      targetPort: http

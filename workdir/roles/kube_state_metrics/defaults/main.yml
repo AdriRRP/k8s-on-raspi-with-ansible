@@ -1,0 +1,12 @@
+---
+monitoring_namespace: monitoring
+kubeconfig_local_path: /home/ansible/.kube/config
+kube_state_metrics_compatibility_minor_version: auto
+kube_state_metrics_default_image: >-
+  {{
+    platform_release_catalog.observability.kube_state_metrics_images[
+      platform_release_catalog.kubernetes.install_version.split('.')[:2] | join('.')
+    ]
+  }}
+kube_state_metrics_supported_images: >-
+  {{ platform_release_catalog.observability.kube_state_metrics_images }}

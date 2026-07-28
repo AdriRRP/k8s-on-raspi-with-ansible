@@ -1,0 +1,96 @@
+---
+- name: Probe apt cache health
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - update
+  register: apt_resilience_cache_probe
+  failed_when: false
+  changed_when: false
+  become: true
+
+- name: Derive Ubuntu old-releases fallback need
+  ansible.builtin.set_fact:
+    apt_resilience_needs_old_releases_fallback: >-
+      {{
+        apt_resilience_enable_old_releases_fallback | bool
+        and ansible_facts['distribution'] == 'Ubuntu'
+        and (apt_resilience_cache_probe.rc | default(0)) != 0
+        and (
+          'no longer has a Release file' in (
+            (apt_resilience_cache_probe.msg | default(''))
+            ~ ' ' ~ (apt_resilience_cache_probe.stdout | default(''))
+            ~ ' ' ~ (apt_resilience_cache_probe.stderr | default(''))
+          )
+          or 'none found at' in (
+            (apt_resilience_cache_probe.msg | default(''))
+            ~ ' ' ~ (apt_resilience_cache_probe.stdout | default(''))
+            ~ ' ' ~ (apt_resilience_cache_probe.stderr | default(''))
+          )
+          or 'Release file' in (
+            (apt_resilience_cache_probe.msg | default(''))
+            ~ ' ' ~ (apt_resilience_cache_probe.stdout | default(''))
+            ~ ' ' ~ (apt_resilience_cache_probe.stderr | default(''))
+          )
+        )
+      }}
+
+- name: Report Ubuntu old-releases fallback activation
+  ansible.builtin.debug:
+    msg: >-
+      APT cache refresh failed for Ubuntu {{ ansible_distribution_release }}.
+      Repointing base repositories to {{ apt_resilience_old_releases_url }}.
+  when: apt_resilience_needs_old_releases_fallback | bool
+
+- name: Check for deb822 Ubuntu source file
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/ubuntu.sources
+  register: apt_resilience_ubuntu_sources_file
+  become: true
+  when: apt_resilience_needs_old_releases_fallback | bool
+
+- name: Check for classic Ubuntu source list
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: apt_resilience_sources_list_file
+  become: true
+  when: apt_resilience_needs_old_releases_fallback | bool
+
+- name: Repoint legacy sources.list.d ubuntu archive entries
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/ubuntu.sources
+    regexp: 'https?://[A-Za-z0-9.-]+/ubuntu(?:-ports)?'
+    replace: "{{ apt_resilience_old_releases_url }}"
+  become: true
+  when:
+    - apt_resilience_needs_old_releases_fallback | bool
+    - apt_resilience_ubuntu_sources_file.stat.exists | default(false)
+
+- name: Repoint classic sources.list ubuntu archive entries
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list
+    regexp: 'https?://[A-Za-z0-9.-]+/(ubuntu|ubuntu-ports)'
+    replace: "{{ apt_resilience_old_releases_url }}"
+  become: true
+  when:
+    - apt_resilience_needs_old_releases_fallback | bool
+    - apt_resilience_sources_list_file.stat.exists | default(false)
+
+- name: Refresh apt cache after old-releases fallback
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - update
+  register: apt_resilience_cache_repair
+  changed_when: false
+  become: true
+  when: apt_resilience_needs_old_releases_fallback | bool
+
+- name: Assert apt cache is healthy after fallback repair
+  ansible.builtin.assert:
+    that:
+      - (apt_resilience_cache_repair.rc | default(1)) == 0
+    fail_msg: >-
+      Failed to repair Ubuntu archive sources automatically. Review the node's
+      APT sources and migrate the operating system to a supported release.
+  when: apt_resilience_needs_old_releases_fallback | bool

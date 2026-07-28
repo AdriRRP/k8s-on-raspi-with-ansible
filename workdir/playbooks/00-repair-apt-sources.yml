@@ -1,0 +1,8 @@
+---
+- name: Repair Ubuntu APT sources on cluster nodes
+  hosts: cluster
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: apt_resilience

@@ -1,0 +1,196 @@
+---
+cluster_admin_user: admin
+cluster_enable_node_mesh_ssh: false
+cluster_node_subnet: "192.168.0.0/24"
+ssh_strict_host_key_checking_mode: accept-new
+admin_passwordless_sudo: true
+
+# Fresh installs track the latest release series we have validated end-to-end.
+platform_release_catalog:
+  os:
+    install_version: "26.04"
+    download_codename: "resolute"
+    preinstalled_server_image_filename: "ubuntu-26.04-preinstalled-server-arm64+raspi.img.xz"
+    latest_stable_lts_version: "26.04"
+    supported_release_upgrade_targets:
+      "22.04": "24.04"
+      "24.04": "26.04"
+      "24.10": "26.04"
+      "25.04": "25.10"
+      "25.10": "26.04"
+    release_upgrade_prerequisites:
+      "26.04":
+        distro_info_data:
+          version: "0.68ubuntu0.1"
+          url: "https://archive.ubuntu.com/ubuntu/pool/main/d/distro-info-data/distro-info-data_0.68ubuntu0.1_all.deb"
+          checksum: "0f73ec95f99a09a5cb9d0f6352f75deecd5fd4a5164839de126ed34abc80fbf8"
+        require_raspberry_pi_eeprom_update: true
+        recover_ssh_via_kubernetes_after_reboot: true
+        ssh_timeout_before_k8s_recovery: 300
+  kubernetes:
+    install_version: "1.36.3"
+    latest_upstream_version: "1.36.3"
+    deb_revision: "1.1"
+    deb_revisions_by_version:
+      "1.36.2": "2.1"
+      "1.36.3": "1.1"
+    supported_upgrade_targets:
+      "1.31": "1.32.13"
+      "1.32": "1.33.13"
+      "1.33": "1.34.10"
+      "1.34": "1.35.7"
+      "1.35": "1.36.3"
+  runtime:
+    containerd_version: "2.3.1"
+    containerd_checksums:
+      amd64: "628448bd973610c656c1cbea8e88b32fafd85b23cc1aa4a3372eb7198478c054"
+      arm64: "46a83603a850f3916ca7c942310daaf82ed17773a85b1d431e92d4a541e46d0d"
+    containerd_service_checksum: "1941362cbaa89dd591b99c32b050d82c583d3cd2e5fa63085d7017457ec5fca8"
+    runc_version: "1.4.2"
+    runc_checksums:
+      amd64: "ac8a90f9e225bb9322189937b230cdc5478d5753f0e31e1bda98a5cf06bd9539"
+      arm64: "ea54032310588e115633aa2f4bba8bf9500257f657e1deca88df5778775138db"
+    cni_plugins_version: "1.9.1"
+    cni_plugins_checksums:
+      amd64: "b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303"
+      arm64: "56171987d3947707c3563db2f4001bccaf50fd63468611b9f3cbecb1375ee7ec"
+    pause_image: "registry.k8s.io/pause:3.10"
+  networking:
+    calico_version: "v3.32.0"
+    calico_tigera_checksum: "e48fe027f8be3d9136a012a32450f1eabc4c5257c0b76083cd1ab32316637d47"
+    calico_custom_resources_checksum: "4fb598a7fce1ad1f8bbfb9004f5efcdb835082e92e06323cb7b8ce60260ed891"
+    metallb_version: "v0.16.1"
+    metallb_manifest_checksum: "bf25feebb7582ca7df845efd52ffbc2960d6cbf4cfc972f47fded9f788b67f0b"
+  observability:
+    prometheus_image: "prom/prometheus:v3.12.0"
+    grafana_image: "grafana/grafana:13.0.1-security-01"
+    node_exporter_image: "quay.io/prometheus/node-exporter:v1.11.1"
+    kube_state_metrics_images:
+      "1.31": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1"
+      "1.32": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.16.0"
+      "1.33": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.17.0"
+      "1.34": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0"
+      "1.35": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0"
+      "1.36": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0"
+  storage:
+    nfs_provisioner_image: "registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2"
+    registry_image: "registry:3.1.1"
+  validation:
+    smoke_test_image: "busybox:1.36.1"
+    dns_test_image: "registry.k8s.io/e2e-test-images/agnhost:2.39"
+
+platform_smoke_test_image: "{{ platform_release_catalog.validation.smoke_test_image }}"
+platform_dns_test_image: "{{ platform_release_catalog.validation.dns_test_image }}"
+
+kubeconfig_local_path: /home/ansible/.kube/config
+kubernetes_outputs: /home/ansible/.kube/outputs
+kubernetes_version: "{{ platform_release_catalog.kubernetes.install_version }}"
+kubernetes_minor_version: "{{ kubernetes_version.split('.')[:2] | join('.') }}"
+kubernetes_deb_revision: >-
+  {{
+    platform_release_catalog.kubernetes.deb_revisions_by_version[
+      platform_release_catalog.kubernetes.install_version
+    ]
+    if (
+      platform_release_catalog.kubernetes.deb_revisions_by_version is defined
+      and platform_release_catalog.kubernetes.install_version
+      in platform_release_catalog.kubernetes.deb_revisions_by_version
+    )
+    else platform_release_catalog.kubernetes.deb_revision
+  }}
+
+monitoring_namespace: monitoring
+monitoring_service_type: ClusterIP
+
+prometheus_service_type: "{{ monitoring_service_type }}"
+grafana_service_type: "{{ monitoring_service_type }}"
+
+grafana_admin_user: admin
+grafana_admin_password_file: "{{ kubernetes_outputs }}/grafana-admin-password"
+grafana_admin_password: >-
+  {{ lookup('ansible.builtin.password', grafana_admin_password_file ~ ' length=24 chars=ascii_letters,digits') }}
+
+registry_service_type: ClusterIP
+registry_expose_lb: false
+registry_persistence_enabled: true
+registry_storage_class_name: raspi-nfs-provisioner
+registry_pvc_size: 20Gi
+registry_lb_ip: ""
+
+set_storageclass_default: true
+
+# Flash-backed Raspberry Pi nodes benefit from volatile node-service logs.
+# Application logs remain available via `kubectl logs`, while node-local journal
+# writes stay in RAM unless you override this back to `auto`.
+common_journald_storage: "volatile"
+
+# Leave the networking dataplane conservative by default.
+# If you explicitly move kube-proxy to nftables, switch Calico in lockstep.
+kube_proxy_mode: "iptables"
+calico_linux_dataplane: "Iptables"
+pod_network_cidr: "10.244.0.0/16"
+service_network_cidr: "10.96.0.0/12"
+
+cluster_discovery_strategy: auto
+cluster_discovery_cidr: ""
+cluster_discovery_ssh_user: "{{ cluster_admin_user }}"
+cluster_discovery_ssh_port: 22
+cluster_discovery_ssh_key_path: /home/ansible/.ssh/id_ed25519
+cluster_discovery_static_inventory_path: /home/ansible/workdir/inventory/hosts.ini
+cluster_discovery_output_path: "{{ kubernetes_outputs }}/discovered_inventory.json"
+
+recovery_seed_bootstrap_user: "{{ ansible_user | default('ubuntu') }}"
+recovery_seed_cloud_init_package_update: false
+recovery_seed_network_mode: dhcp
+recovery_seed_network_required: false
+recovery_seed_interface_name: eth0
+recovery_seed_interface_mac: ""
+recovery_seed_static_prefix: 24
+recovery_seed_static_gateway: ""
+recovery_seed_nameservers: []
+recovery_seed_control_plane_interface_name: ""
+recovery_seed_control_plane_interface_mac: ""
+recovery_seed_control_plane_static_prefix: 24
+recovery_seed_control_plane_static_gateway: ""
+recovery_seed_control_plane_nameservers: []
+recovery_node_wait_for_connection_timeout: 900
+recovery_node_wait_for_connection_delay: 5
+recovery_known_hosts_path: /home/ansible/.ssh/known_hosts
+
+upgrade_target_kubernetes_version: ""
+upgrade_target_os_version: ""
+upgrade_target_kubernetes_deb_revision: "{{ kubernetes_deb_revision }}"
+upgrade_execution_mode: dry-run
+upgrade_maintenance_scope: cluster
+upgrade_plan_file: "{{ kubernetes_outputs }}/upgrade-plan.json"
+upgrade_require_kubeadm_plan: true
+upgrade_capture_snapshots: true
+upgrade_snapshot_dir: "{{ kubernetes_outputs }}/upgrade-snapshots"
+upgrade_run_id: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+upgrade_pre_snapshot_file: "{{ upgrade_snapshot_dir }}/{{ upgrade_run_id }}-pre.json"
+upgrade_post_snapshot_file: "{{ upgrade_snapshot_dir }}/{{ upgrade_run_id }}-post.json"
+upgrade_failure_dir: "{{ kubernetes_outputs }}/upgrade-failures/{{ upgrade_run_id }}"
+upgrade_reconcile_platform_addons: true
+upgrade_enforce_replicated_workloads: true
+upgrade_require_pdb_protection: true
+upgrade_allow_single_replica_workloads: false
+upgrade_replicated_workload_exempt_namespaces:
+  - kube-system
+  - metallb-system
+  - monitoring
+  - registry
+upgrade_workload_safety_exemptions:
+  - calico-system/calico-kube-controllers
+  - calico-system/goldmane
+  - calico-system/whisker
+  - nfs-storage/nfs-subdir-external-provisioner
+  - tigera-operator/tigera-operator
+upgrade_os_patch_nodes: false
+upgrade_os_release_nodes: false
+upgrade_reboot_after_os_patch: true
+upgrade_worker_auto_package_rollback: false
+upgrade_control_plane_auto_package_rollback: false
+upgrade_drain_timeout: 10m
+upgrade_drain_grace_period: 30
+upgrade_delete_emptydir_data: true
+upgrade_force_drain: false

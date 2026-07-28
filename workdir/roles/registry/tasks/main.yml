@@ -1,3 +1,12 @@
-- import_tasks: deploy.yml
-- import_tasks: verify.yml
-- import_tasks: external-verify.yml
+---
+- name: Include registry deployment tasks
+  ansible.builtin.import_tasks: deploy.yml
+
+- name: Include registry verification tasks
+  ansible.builtin.import_tasks: verify.yml
+
+- name: Include registry external verification tasks
+  ansible.builtin.import_tasks: external-verify.yml
+  when:
+    - registry_service_type == "LoadBalancer"
+    - registry_lb_ip | length > 0

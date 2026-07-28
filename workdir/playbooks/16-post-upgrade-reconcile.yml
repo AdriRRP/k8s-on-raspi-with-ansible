@@ -1,0 +1,25 @@
+---
+- name: Finalize a completed Kubernetes upgrade
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reconcile installed platform addons after Kubernetes upgrade
+      ansible.builtin.include_role:
+        name: k8s_upgrade_addons
+      when: upgrade_reconcile_platform_addons | bool
+
+    - name: Re-run cluster verification after applied upgrade
+      ansible.builtin.include_role:
+        name: k8s_verify
+
+    - name: Capture post-upgrade snapshot
+      ansible.builtin.include_role:
+        name: k8s_upgrade_snapshot
+      vars:
+        k8s_upgrade_snapshot_target_file: >-
+          {{
+            hostvars['localhost'].upgrade_post_snapshot_file_resolved
+            | default(upgrade_post_snapshot_file)
+          }}
+      when: upgrade_capture_snapshots | bool

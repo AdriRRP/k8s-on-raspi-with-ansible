@@ -1,3 +1,4 @@
+---
 - name: Create namespace for MetalLB
   kubernetes.core.k8s:
     state: present
@@ -6,8 +7,30 @@
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
+- name: Download verified MetalLB manifest
+  ansible.builtin.get_url:
+    url: "{{ metallb_manifest_url }}"
+    dest: "{{ metallb_manifest_path }}"
+    checksum: "sha256:{{ metallb_manifest_checksum }}"
+    mode: '0644'
+  delegate_to: localhost
+
 - name: Apply MetalLB manifest
-  ansible.builtin.command: >
-    kubectl apply -f {{ metallb_manifest_url }} --kubeconfig={{ kubeconfig_local_path }}
-  changed_when: false
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - apply
+      - --filename
+      - "{{ metallb_manifest_path }}"
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: metallb_manifest_apply
+  changed_when: >-
+    'created' in metallb_manifest_apply.stdout
+    or 'configured' in metallb_manifest_apply.stdout
+  delegate_to: localhost
+
+- name: Remove temporary MetalLB manifest
+  ansible.builtin.file:
+    path: "{{ metallb_manifest_path }}"
+    state: absent
   delegate_to: localhost

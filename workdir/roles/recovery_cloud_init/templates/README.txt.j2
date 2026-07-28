@@ -1,0 +1,35 @@
+Recovery seed for {{ inventory_hostname }}
+======================================
+
+Files to copy onto the Ubuntu boot partition before first boot:
+- user-data
+- meta-data
+- network-config
+
+Bootstrap SSH user: {{ recovery_seed_bootstrap_user }}
+Cluster admin user: {{ cluster_admin_user }}
+Target host/IP: {{ ansible_host | default(inventory_hostname) }}
+Network mode: {{ recovery_seed_network_mode }}
+Interface selector: {% if recovery_seed_interface_mac | default('') | trim %}mac={{ recovery_seed_interface_mac }}{% else %}name={{ recovery_seed_interface_name }}{% endif %}
+
+Network required before cloud-init continues: {{ 'yes' if (recovery_seed_network_mode == 'static' or recovery_seed_network_required | bool) else 'no' }}
+cloud-init package_update on first boot: {{ 'yes' if recovery_seed_cloud_init_package_update | bool else 'no' }}
+{% if recovery_seed_network_mode == 'static' %}
+Static prefix: /{{ recovery_seed_static_prefix }}
+Gateway: {{ recovery_seed_static_gateway | default('') if recovery_seed_static_gateway else 'not set' }}
+Nameservers: {{ recovery_seed_nameservers | join(', ') if recovery_seed_nameservers | length > 0 else 'not set' }}
+{% endif %}
+
+After first boot:
+1. Wait for cloud-init to finish.
+2. Confirm the node has come back on {{ ansible_host | default(inventory_hostname) }}.
+3. Confirm SSH access as {{ recovery_seed_bootstrap_user }}.
+4. Run the relevant recovery playbook from the control host.
+
+Examples:
+{% if inventory_hostname in groups['workers'] | default([]) %}
+- Worker: ./cluster-control.sh --recover-worker --limit {{ inventory_hostname }}
+{% else %}
+- Worker example: ./cluster-control.sh --recover-worker --limit raspi-worker2
+{% endif %}
+- Master: ./cluster-control.sh --recover-master --recovery-bundle-id <BUNDLE_ID>

@@ -1,0 +1,367 @@
+---
+- name: Validate requested control-plane restore mode
+  ansible.builtin.assert:
+    that:
+      - control_plane_restore_mode in ['validate', 'apply']
+    fail_msg: "control_plane_restore_mode must be 'validate' or 'apply'."
+
+- name: Resolve local recovery bundle path and identifier
+  ansible.builtin.set_fact:
+    control_plane_restore_bundle_local_path_resolved: "{{ control_plane_restore_bundle_local_path }}"
+    control_plane_restore_bundle_id_resolved: "{{ control_plane_restore_bundle_local_path | basename }}"
+    control_plane_restore_remote_dir_resolved: "{{ control_plane_restore_remote_dir }}"
+    control_plane_restore_rehearsal_dir_resolved: "{{ control_plane_restore_rehearsal_dir }}"
+
+- name: Assert recovery bundle directory exists locally
+  ansible.builtin.stat:
+    path: "{{ control_plane_restore_bundle_local_path_resolved }}"
+  register: control_plane_restore_bundle_dir_stat
+  delegate_to: localhost
+  become: false
+
+- name: Fail when recovery bundle directory is missing
+  ansible.builtin.assert:
+    that:
+      - control_plane_restore_bundle_dir_stat.stat.exists
+      - control_plane_restore_bundle_dir_stat.stat.isdir
+    fail_msg: >-
+      Recovery bundle not found at {{ control_plane_restore_bundle_local_path_resolved }}.
+
+- name: Check required recovery bundle artifacts
+  ansible.builtin.stat:
+    path: "{{ control_plane_restore_bundle_local_path_resolved }}/{{ item }}"
+  loop:
+    - manifest.json
+    - etcd-snapshot.db
+    - kubeadm-init-config.yaml
+    - kubernetes-pki.tar.gz
+    - kubernetes-manifests.tar.gz
+    - admin.conf
+  register: control_plane_restore_required_bundle_files
+  delegate_to: localhost
+  become: false
+
+- name: Assert all required recovery bundle artifacts exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+    fail_msg: >-
+      Missing recovery bundle artifact: {{ item.item }} under
+      {{ control_plane_restore_bundle_local_path_resolved }}.
+  loop: "{{ control_plane_restore_required_bundle_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read recovery bundle manifest
+  ansible.builtin.slurp:
+    src: "{{ control_plane_restore_bundle_local_path_resolved }}/manifest.json"
+  register: control_plane_restore_manifest_raw
+  delegate_to: localhost
+  become: false
+
+- name: Parse recovery bundle manifest
+  ansible.builtin.set_fact:
+    control_plane_restore_manifest: "{{ control_plane_restore_manifest_raw.content | b64decode | from_json }}"
+    control_plane_restore_etcd_image: "{{ (control_plane_restore_manifest_raw.content | b64decode | from_json).etcd_image }}"
+
+- name: Validate manifest matches target node
+  ansible.builtin.assert:
+    that:
+      - control_plane_restore_manifest.control_plane_node == inventory_hostname
+      - control_plane_restore_manifest.control_plane_ip == (ansible_host | default(inventory_hostname))
+    fail_msg: >-
+      Recovery bundle {{ control_plane_restore_bundle_id_resolved }} targets
+      {{ control_plane_restore_manifest.control_plane_node }} at
+      {{ control_plane_restore_manifest.control_plane_ip }}, not this host.
+
+- name: Create remote recovery bundle workspace
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop:
+    - "{{ control_plane_restore_remote_dir_resolved }}"
+    - "{{ control_plane_restore_rehearsal_dir_resolved }}"
+  become: true
+
+- name: Copy recovery bundle artifacts to target node
+  ansible.builtin.copy:
+    src: "{{ control_plane_restore_bundle_local_path_resolved }}/{{ item }}"
+    dest: "{{ control_plane_restore_remote_dir_resolved }}/{{ item }}"
+    owner: root
+    group: root
+    mode: '0600'
+  loop:
+    - manifest.json
+    - etcd-snapshot.db
+    - kubeadm-init-config.yaml
+    - kubernetes-pki.tar.gz
+    - kubernetes-manifests.tar.gz
+    - admin.conf
+  become: true
+
+- name: Validate kubeadm configuration from recovery bundle
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - config
+      - validate
+      - --config
+      - "{{ control_plane_restore_remote_dir_resolved }}/kubeadm-init-config.yaml"
+  changed_when: false
+  become: true
+
+- name: Read etcd snapshot metadata from recovery bundle
+  ansible.builtin.shell: >
+    ctr -n {{ control_plane_restore_runtime_namespace }} run --rm --net-host
+    --mount type=bind,src={{ control_plane_restore_remote_dir_resolved }},dst=/bundle,options=rbind:ro
+    {{ control_plane_restore_etcd_image }}
+    control-plane-restore-status-{{ control_plane_restore_bundle_id_resolved }}
+    etcdutl snapshot status /bundle/etcd-snapshot.db -w table
+  args:
+    executable: /bin/bash
+  register: control_plane_restore_snapshot_status
+  changed_when: false
+  become: true
+
+- name: Rehearse restoring etcd snapshot into a temporary data directory
+  ansible.builtin.shell: >
+    rm -rf {{ control_plane_restore_rehearsal_dir_resolved }}/etcd &&
+    ctr -n {{ control_plane_restore_runtime_namespace }} run --rm --net-host
+    --mount type=bind,src={{ control_plane_restore_remote_dir_resolved }},dst=/bundle,options=rbind:ro
+    --mount type=bind,src={{ control_plane_restore_rehearsal_dir_resolved }},dst=/restore,options=rbind:rw
+    {{ control_plane_restore_etcd_image }}
+    control-plane-restore-rehearsal-{{ control_plane_restore_bundle_id_resolved }}
+    etcdutl snapshot restore /bundle/etcd-snapshot.db
+    --data-dir /restore/etcd
+    --name {{ control_plane_restore_manifest.control_plane_node }}
+    --initial-cluster
+    {{ control_plane_restore_manifest.control_plane_node }}=https://{{ control_plane_restore_manifest.control_plane_ip }}:2380
+    --initial-advertise-peer-urls https://{{ control_plane_restore_manifest.control_plane_ip }}:2380
+    --initial-cluster-token restore-{{ control_plane_restore_bundle_id_resolved }}
+  args:
+    executable: /bin/bash
+  changed_when: true
+  become: true
+
+- name: Assert restored etcd rehearsal data directory exists
+  ansible.builtin.stat:
+    path: "{{ control_plane_restore_rehearsal_dir_resolved }}/etcd/member/snap/db"
+  register: control_plane_restore_rehearsal_db
+  become: true
+
+- name: Fail when restored etcd rehearsal data is missing
+  ansible.builtin.assert:
+    that:
+      - control_plane_restore_rehearsal_db.stat.exists
+      - control_plane_restore_rehearsal_db.stat.isreg
+    fail_msg: >-
+      The etcd snapshot rehearsal did not produce a restored member database.
+
+- name: Unpack PKI archive into rehearsal workspace
+  ansible.builtin.unarchive:
+    src: "{{ control_plane_restore_remote_dir_resolved }}/kubernetes-pki.tar.gz"
+    dest: "{{ control_plane_restore_rehearsal_dir_resolved }}"
+    remote_src: true
+  become: true
+
+- name: Unpack static manifests archive into rehearsal workspace
+  ansible.builtin.unarchive:
+    src: "{{ control_plane_restore_remote_dir_resolved }}/kubernetes-manifests.tar.gz"
+    dest: "{{ control_plane_restore_rehearsal_dir_resolved }}"
+    remote_src: true
+  become: true
+
+- name: Require explicit destructive confirmation for master restore
+  ansible.builtin.assert:
+    that:
+      - control_plane_restore_confirm_destructive | bool
+    fail_msg: >-
+      Destructive control-plane restore requires control_plane_restore_confirm_destructive=true.
+  when: control_plane_restore_mode == 'apply'
+
+- name: Stop kubelet before destructive control-plane restore
+  ansible.builtin.systemd:
+    name: kubelet
+    state: stopped
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Create pre-restore backup directory
+  ansible.builtin.file:
+    path: "{{ control_plane_restore_pre_restore_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Check for existing control-plane directories before backup
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ control_plane_restore_kubernetes_dir }}"
+    - "{{ control_plane_restore_etcd_data_dir }}"
+  register: control_plane_restore_existing_paths
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Backup existing control-plane directories when present
+  ansible.builtin.command:
+    argv:
+      - mv
+      - "{{ item.item }}"
+      - "{{ control_plane_restore_pre_restore_backup_dir }}/{{ item.item | basename }}"
+  loop: "{{ control_plane_restore_existing_paths.results }}"
+  when:
+    - control_plane_restore_mode == 'apply'
+    - item.stat.exists
+  changed_when: true
+  become: true
+
+- name: Recreate base directories for restored control plane
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ control_plane_restore_kubernetes_dir }}"
+    - /var/lib
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Restore Kubernetes PKI from recovery bundle
+  ansible.builtin.unarchive:
+    src: "{{ control_plane_restore_remote_dir_resolved }}/kubernetes-pki.tar.gz"
+    dest: "{{ control_plane_restore_kubernetes_dir }}"
+    remote_src: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Restore etcd data directory from snapshot
+  ansible.builtin.shell: >
+    ctr -n {{ control_plane_restore_runtime_namespace }} run --rm --net-host
+    --mount type=bind,src={{ control_plane_restore_remote_dir_resolved }},dst=/bundle,options=rbind:ro
+    --mount type=bind,src=/var/lib,dst=/restorebase,options=rbind:rw
+    {{ control_plane_restore_etcd_image }}
+    control-plane-restore-apply-{{ control_plane_restore_bundle_id_resolved }}
+    etcdutl snapshot restore /bundle/etcd-snapshot.db
+    --data-dir /restorebase/etcd
+    --name {{ control_plane_restore_manifest.control_plane_node }}
+    --initial-cluster
+    {{ control_plane_restore_manifest.control_plane_node }}=https://{{ control_plane_restore_manifest.control_plane_ip }}:2380
+    --initial-advertise-peer-urls https://{{ control_plane_restore_manifest.control_plane_ip }}:2380
+    --initial-cluster-token restore-{{ control_plane_restore_bundle_id_resolved }}
+  args:
+    executable: /bin/bash
+  changed_when: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Generate kubeconfig files for restored control plane
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - phase
+      - kubeconfig
+      - all
+      - --config
+      - "{{ control_plane_restore_remote_dir_resolved }}/kubeadm-init-config.yaml"
+  changed_when: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Generate restored etcd static Pod manifest
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - phase
+      - etcd
+      - local
+      - --config
+      - "{{ control_plane_restore_remote_dir_resolved }}/kubeadm-init-config.yaml"
+  changed_when: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Generate restored control-plane static Pod manifests
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - phase
+      - control-plane
+      - all
+      - --config
+      - "{{ control_plane_restore_remote_dir_resolved }}/kubeadm-init-config.yaml"
+  changed_when: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Start kubelet for restored control plane
+  ansible.builtin.systemd:
+    name: kubelet
+    state: started
+    enabled: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Wait for the API server port to become reachable locally
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 6443
+    timeout: 600
+    delay: 5
+    sleep: 5
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Finalize kubelet configuration after API recovery
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - init
+      - phase
+      - kubelet-finalize
+      - all
+      - --config
+      - "{{ control_plane_restore_remote_dir_resolved }}/kubeadm-init-config.yaml"
+  changed_when: true
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Wait until restored control-plane node becomes Ready
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - "--kubeconfig={{ control_plane_restore_kubernetes_dir }}/admin.conf"
+      - get
+      - node
+      - "{{ control_plane_restore_manifest.control_plane_node }}"
+      - -o
+      - "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}"
+  register: control_plane_restore_ready_node
+  retries: 60
+  delay: 10
+  until: control_plane_restore_ready_node.stdout == 'True'
+  changed_when: false
+  become: true
+  when: control_plane_restore_mode == 'apply'
+
+- name: Remove remote recovery artifacts after successful restore
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  when: not (control_plane_restore_keep_remote_artifacts | bool)
+  loop:
+    - "{{ control_plane_restore_remote_dir_resolved }}"
+    - "{{ control_plane_restore_rehearsal_dir_resolved }}"
+  become: true

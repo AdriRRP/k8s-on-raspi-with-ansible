@@ -1,0 +1,3 @@
+APT::Keep-Downloaded-Packages "{{ 'true' if common_apt_keep_downloaded_packages | bool else 'false' }}";
+APT::Periodic::AutocleanInterval "{{ common_apt_periodic_autoclean_interval_days }}";
+APT::Periodic::Verbose "0";

@@ -1,6 +1,15 @@
+---
 - name: Deploy internal private Docker registry
   hosts: localhost
   gather_facts: false
 
+  vars:
+    preflight_require_storage_class: "{{ registry_persistence_enabled | bool }}"
+    preflight_storage_class_name: "{{ registry_storage_class_name }}"
+    preflight_require_loadbalancer_support: "{{ registry_service_type == 'LoadBalancer' }}"
+    preflight_require_registry_lb_ip: "{{ registry_service_type == 'LoadBalancer' }}"
+    preflight_registry_lb_ip: "{{ registry_lb_ip }}"
+
   roles:
+    - role: cluster_preflight
     - registry

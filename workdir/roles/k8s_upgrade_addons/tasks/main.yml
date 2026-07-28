@@ -1,0 +1,227 @@
+---
+- name: Query cluster namespaces for addon reconciliation
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_addon_namespaces
+  delegate_to: localhost
+
+- name: Record discovered namespaces for addon reconciliation
+  ansible.builtin.set_fact:
+    upgrade_detected_namespace_names: "{{ upgrade_addon_namespaces.resources | map(attribute='metadata.name') | list }}"
+  delegate_to: localhost
+
+- name: Query monitoring deployments
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_monitoring_deployments
+  delegate_to: localhost
+  when: monitoring_namespace in upgrade_detected_namespace_names
+
+- name: Query monitoring daemonsets
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_monitoring_daemonsets
+  delegate_to: localhost
+  when: monitoring_namespace in upgrade_detected_namespace_names
+
+- name: Query monitoring pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_monitoring_pods
+  delegate_to: localhost
+  when: monitoring_namespace in upgrade_detected_namespace_names
+
+- name: Query NFS provisioner deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ nfs_namespace }}"
+    name: "{{ nfs_provisioner_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_nfs_provisioner_deployment
+  delegate_to: localhost
+  when: nfs_namespace in upgrade_detected_namespace_names
+
+- name: Query registry deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ registry_namespace }}"
+    name: "{{ registry_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_registry_deployment
+  delegate_to: localhost
+  when: registry_namespace in upgrade_detected_namespace_names
+
+- name: Query MetalLB controller deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ metallb_namespace }}"
+    name: controller
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_metallb_controller
+  delegate_to: localhost
+  when: metallb_namespace in upgrade_detected_namespace_names
+
+- name: Derive installed addon facts
+  ansible.builtin.set_fact:
+    upgrade_has_calico: >-
+      {{
+        'calico-system' in upgrade_detected_namespace_names
+        or 'tigera-operator' in upgrade_detected_namespace_names
+      }}
+    upgrade_has_metallb: "{{ (upgrade_metallb_controller.resources | default([])) | length > 0 }}"
+    upgrade_has_nfs_provisioner: "{{ (upgrade_nfs_provisioner_deployment.resources | default([])) | length > 0 }}"
+    upgrade_has_registry: "{{ (upgrade_registry_deployment.resources | default([])) | length > 0 }}"
+    upgrade_has_prometheus: >-
+      {{
+        (upgrade_monitoring_deployments.resources | default([]))
+        | selectattr('metadata.name', 'equalto', 'prometheus')
+        | list
+        | length > 0
+      }}
+    upgrade_has_grafana: >-
+      {{
+        (upgrade_monitoring_deployments.resources | default([]))
+        | selectattr('metadata.name', 'equalto', 'grafana')
+        | list
+        | length > 0
+      }}
+    upgrade_has_kube_state_metrics: >-
+      {{
+        (upgrade_monitoring_deployments.resources | default([]))
+        | selectattr('metadata.name', 'equalto', 'kube-state-metrics')
+        | list
+        | length > 0
+      }}
+    upgrade_has_node_exporter: >-
+      {{
+        (upgrade_monitoring_daemonsets.resources | default([]))
+        | selectattr('metadata.name', 'equalto', 'node-exporter')
+        | list
+        | length > 0
+      }}
+    upgrade_prometheus_existing_node_name: >-
+      {{
+        (
+          (upgrade_monitoring_pods.resources | default([]))
+          | selectattr('metadata.labels.app', 'defined')
+          | selectattr('metadata.labels.app', 'equalto', 'prometheus')
+          | selectattr('status.phase', 'equalto', 'Running')
+          | map(attribute='spec.nodeName')
+          | list
+          | first
+        ) | default('')
+      }}
+    upgrade_grafana_existing_node_name: >-
+      {{
+        (
+          (upgrade_monitoring_pods.resources | default([]))
+          | selectattr('metadata.labels.app', 'defined')
+          | selectattr('metadata.labels.app', 'equalto', 'grafana')
+          | selectattr('status.phase', 'equalto', 'Running')
+          | map(attribute='spec.nodeName')
+          | list
+          | first
+        ) | default('')
+      }}
+  delegate_to: localhost
+
+- name: Show addon reconciliation scope
+  ansible.builtin.debug:
+    msg:
+      calico: "{{ upgrade_has_calico }}"
+      metallb: "{{ upgrade_has_metallb }}"
+      nfs_provisioner: "{{ upgrade_has_nfs_provisioner }}"
+      registry: "{{ upgrade_has_registry }}"
+      prometheus: "{{ upgrade_has_prometheus }}"
+      node_exporter: "{{ upgrade_has_node_exporter }}"
+      kube_state_metrics: "{{ upgrade_has_kube_state_metrics }}"
+      grafana: "{{ upgrade_has_grafana }}"
+      prometheus_node: "{{ upgrade_prometheus_existing_node_name }}"
+      grafana_node: "{{ upgrade_grafana_existing_node_name }}"
+  delegate_to: localhost
+
+- name: Reconcile installed Calico components
+  ansible.builtin.include_role:
+    name: k8s_init
+    tasks_from: cni.yml
+  vars:
+    k8s_init_apply_kubeconfig_path: "{{ kubeconfig_local_path }}"
+  when: upgrade_has_calico | bool
+
+- name: Reconcile installed MetalLB
+  ansible.builtin.include_role:
+    name: metallb
+  when: upgrade_has_metallb | bool
+
+- name: Reconcile installed NFS provisioner
+  ansible.builtin.include_role:
+    name: nfs_provisioner
+  when: upgrade_has_nfs_provisioner | bool
+
+- name: Run preflight for installed registry reconciliation  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.include_role:
+    name: cluster_preflight
+  vars:
+    preflight_require_storage_class: "{{ registry_persistence_enabled | bool }}"
+    preflight_storage_class_name: "{{ registry_storage_class_name }}"
+    preflight_require_loadbalancer_support: "{{ registry_service_type == 'LoadBalancer' }}"
+    preflight_require_registry_lb_ip: "{{ registry_service_type == 'LoadBalancer' }}"
+    preflight_registry_lb_ip: "{{ registry_lb_ip }}"
+  when: upgrade_has_registry | bool
+
+- name: Reconcile installed registry
+  ansible.builtin.include_role:
+    name: registry
+  when: upgrade_has_registry | bool
+
+- name: Run preflight for installed monitoring reconciliation  # noqa: var-naming[no-role-prefix]
+  ansible.builtin.include_role:
+    name: cluster_preflight
+  vars:
+    preflight_require_storage_class: "{{ upgrade_has_prometheus | bool or upgrade_has_grafana | bool }}"
+    preflight_storage_class_name: "{{ storage_class_name | default('raspi-nfs-provisioner') }}"
+    preflight_require_loadbalancer_support: "{{ prometheus_service_type == 'LoadBalancer' or grafana_service_type == 'LoadBalancer' }}"
+  when: >-
+    upgrade_has_prometheus | bool
+    or upgrade_has_node_exporter | bool
+    or upgrade_has_kube_state_metrics | bool
+    or upgrade_has_grafana | bool
+
+- name: Reconcile installed Prometheus
+  ansible.builtin.include_role:
+    name: prometheus
+  vars:
+    prometheus_runtime_node_name: "{{ upgrade_prometheus_existing_node_name }}"
+  when: upgrade_has_prometheus | bool
+
+- name: Reconcile installed node-exporter
+  ansible.builtin.include_role:
+    name: node_exporter
+  when: upgrade_has_node_exporter | bool
+
+- name: Reconcile installed kube-state-metrics
+  ansible.builtin.include_role:
+    name: kube_state_metrics
+  when: upgrade_has_kube_state_metrics | bool
+
+- name: Reconcile installed Grafana
+  ansible.builtin.include_role:
+    name: grafana
+  vars:
+    grafana_runtime_node_name: "{{ upgrade_grafana_existing_node_name }}"
+    grafana_auto_reset_persistent_state_on_provisioning_failure: "{{ upgrade_grafana_auto_reset_persistent_state_on_provisioning_failure }}"
+  when: upgrade_has_grafana | bool

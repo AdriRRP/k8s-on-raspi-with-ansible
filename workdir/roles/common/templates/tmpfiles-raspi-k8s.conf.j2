@@ -1,0 +1,3 @@
+# Keep temporary directories tidy on small nodes.
+d /tmp 1777 root root {{ common_tmp_cleanup_age }} -
+d /var/tmp 1777 root root {{ common_var_tmp_cleanup_age }} -

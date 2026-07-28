@@ -1,0 +1,9 @@
+---
+recovery_bundle_id: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+recovery_bundle_remote_dir: "/var/backups/k8s-recovery/{{ recovery_bundle_id }}"
+recovery_bundle_local_dir: "{{ kubernetes_outputs }}/recovery-bundles/{{ recovery_bundle_id }}"
+recovery_bundle_kubeconfig_path: "/etc/kubernetes/admin.conf"
+recovery_bundle_etcd_pod_name: "etcd-{{ inventory_hostname }}"
+recovery_bundle_retain_on_node: false
+recovery_bundle_etcd_snapshot_remote_path: "/var/lib/etcd/recovery-snapshot-{{ recovery_bundle_id }}.db"
+recovery_bundle_pod_network_cidr: "{{ pod_network_cidr | default('10.244.0.0/16') }}"

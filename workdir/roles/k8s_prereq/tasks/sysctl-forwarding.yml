@@ -1,0 +1,67 @@
+---
+- name: Persist required kernel modules for container networking
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Load overlay kernel module
+  ansible.builtin.command: modprobe overlay
+  changed_when: false
+  become: true
+
+- name: Load br_netfilter kernel module
+  ansible.builtin.command: modprobe br_netfilter
+  changed_when: false
+  become: true
+
+- name: Apply Kubernetes networking sysctls at runtime
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+  loop:
+    - name: net.ipv4.ip_forward
+      value: "1"
+    - name: net.bridge.bridge-nf-call-iptables
+      value: "1"
+    - name: net.bridge.bridge-nf-call-ip6tables
+      value: "1"
+  become: true
+
+- name: Ensure persistent sysctl settings for Kubernetes networking
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k8s-networking.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+    owner: root
+    group: root
+    mode: '0644'
+  become: true
+
+- name: Reload all sysctl settings
+  ansible.builtin.command: sysctl --system
+  become: true
+  changed_when: false
+
+- name: Validate Kubernetes networking sysctls
+  ansible.builtin.command: sysctl -n {{ item }}
+  loop:
+    - net.ipv4.ip_forward
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+  register: k8s_sysctl_values
+  changed_when: false
+  failed_when: k8s_sysctl_values.stdout != '1'
+
+- name: Confirm Kubernetes networking sysctls are enabled
+  ansible.builtin.debug:
+    msg: "Kubernetes networking sysctls are enabled and persistent."

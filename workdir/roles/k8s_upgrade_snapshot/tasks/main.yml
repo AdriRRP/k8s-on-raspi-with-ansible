@@ -1,0 +1,43 @@
+---
+- name: Ensure upgrade snapshot directory exists
+  ansible.builtin.file:
+    path: "{{ upgrade_snapshot_dir }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+
+- name: Capture cluster upgrade snapshot
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'python3',
+          playbook_dir ~ '/../tools/cluster_upgrade_report.py',
+          '--kubeconfig',
+          kubeconfig_local_path,
+          '--output',
+          k8s_upgrade_snapshot_target_file
+        ]
+        + (
+          upgrade_replicated_workload_exempt_namespaces
+          | map('regex_replace', '^', '--exempt-namespace=')
+          | list
+        )
+        + (
+          upgrade_workload_safety_exemptions
+          | map('regex_replace', '^', '--exempt-workload=')
+          | list
+        )
+      }}
+  changed_when: false
+  delegate_to: localhost
+
+- name: Read captured cluster upgrade snapshot
+  ansible.builtin.slurp:
+    src: "{{ k8s_upgrade_snapshot_target_file }}"
+  register: captured_upgrade_snapshot_raw
+  delegate_to: localhost
+
+- name: Expose captured cluster upgrade snapshot as fact
+  ansible.builtin.set_fact:
+    captured_upgrade_snapshot: "{{ captured_upgrade_snapshot_raw.content | b64decode | from_json }}"

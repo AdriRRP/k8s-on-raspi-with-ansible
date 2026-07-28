@@ -1,0 +1,433 @@
+---
+- name: Query cluster server version
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - version
+      - --output=json
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: cluster_version_raw
+  changed_when: false
+  delegate_to: localhost
+
+- name: Freeze upgrade run identifier for this execution
+  ansible.builtin.set_fact:
+    upgrade_run_id_resolved: "{{ upgrade_run_id }}"
+  delegate_to: localhost
+
+- name: Freeze upgrade artifact paths for this execution
+  ansible.builtin.set_fact:
+    upgrade_pre_snapshot_file_resolved: "{{ upgrade_snapshot_dir }}/{{ upgrade_run_id_resolved }}-pre.json"
+    upgrade_post_snapshot_file_resolved: "{{ upgrade_snapshot_dir }}/{{ upgrade_run_id_resolved }}-post.json"
+    upgrade_failure_dir_resolved: "{{ kubernetes_outputs }}/upgrade-failures/{{ upgrade_run_id_resolved }}"
+  delegate_to: localhost
+
+- name: Validate upgrade execution mode and maintenance scope
+  ansible.builtin.assert:
+    that:
+      - upgrade_execution_mode in ['apply', 'dry-run']
+      - upgrade_maintenance_scope in ['cluster', 'kubernetes', 'os']
+    fail_msg: >-
+      upgrade_execution_mode must be apply or dry-run, and
+      upgrade_maintenance_scope must be cluster, kubernetes or os.
+  delegate_to: localhost
+
+- name: Validate OS-only maintenance configuration
+  ansible.builtin.assert:
+    that:
+      - upgrade_os_patch_nodes | bool
+    fail_msg: >-
+      upgrade_maintenance_scope=os requires upgrade_os_patch_nodes=true,
+      otherwise the maintenance window would be a no-op.
+  when: upgrade_maintenance_scope == 'os'
+  delegate_to: localhost
+
+- name: Parse cluster version information
+  ansible.builtin.set_fact:
+    cluster_version_info: "{{ cluster_version_raw.stdout | from_json }}"
+    cluster_current_kubernetes_version: >-
+      {{
+        (cluster_version_raw.stdout | from_json).serverVersion.gitVersion
+        | regex_replace('^v', '')
+      }}
+    cluster_current_kubernetes_minor_version: >-
+      {{
+        (
+          (cluster_version_raw.stdout | from_json).serverVersion.gitVersion
+          | regex_replace('^v', '')
+        ).split('.')[:2] | join('.')
+      }}
+
+- name: Ensure an automatic next-hop target exists when none was requested
+  ansible.builtin.assert:
+    that:
+      - >-
+        upgrade_target_kubernetes_version | length > 0
+        or cluster_current_kubernetes_minor_version in platform_release_catalog.kubernetes.supported_upgrade_targets
+    fail_msg: >-
+      No automatic next-hop target is defined for Kubernetes {{ cluster_current_kubernetes_minor_version }}.
+      Set upgrade_target_kubernetes_version explicitly or extend platform_release_catalog.kubernetes.supported_upgrade_targets.
+  when: upgrade_maintenance_scope != 'os'
+  delegate_to: localhost
+
+- name: Resolve effective Kubernetes upgrade target
+  ansible.builtin.set_fact:
+    upgrade_effective_target_kubernetes_version: >-
+      {{
+        upgrade_target_kubernetes_version
+        if upgrade_target_kubernetes_version | length > 0
+        else platform_release_catalog.kubernetes.supported_upgrade_targets[cluster_current_kubernetes_minor_version]
+      }}
+    upgrade_effective_target_kubernetes_deb_revision: >-
+      {{
+        (
+          platform_release_catalog.kubernetes.deb_revisions_by_version[
+            (
+              upgrade_target_kubernetes_version
+              if upgrade_target_kubernetes_version | length > 0
+              else platform_release_catalog.kubernetes.supported_upgrade_targets[cluster_current_kubernetes_minor_version]
+            )
+          ]
+          if (
+            platform_release_catalog.kubernetes.deb_revisions_by_version is defined
+            and (
+              upgrade_target_kubernetes_version
+              if upgrade_target_kubernetes_version | length > 0
+              else platform_release_catalog.kubernetes.supported_upgrade_targets[cluster_current_kubernetes_minor_version]
+            ) in platform_release_catalog.kubernetes.deb_revisions_by_version
+          )
+          else upgrade_target_kubernetes_deb_revision
+        )
+      }}
+  when: upgrade_maintenance_scope != 'os'
+  delegate_to: localhost
+
+- name: Report automatic next-hop target
+  ansible.builtin.debug:
+    msg: >-
+      No explicit target requested. Using supported next hop
+      {{ upgrade_effective_target_kubernetes_version }} for cluster
+      {{ cluster_current_kubernetes_version }}.
+  when:
+    - upgrade_maintenance_scope != 'os'
+    - upgrade_target_kubernetes_version | length == 0
+  delegate_to: localhost
+
+- name: Validate target Kubernetes version format
+  ansible.builtin.assert:
+    that:
+      - upgrade_effective_target_kubernetes_version is match('^\\d+\\.\\d+\\.\\d+$')
+      - upgrade_effective_target_kubernetes_deb_revision is match('^\\d+(\\.\\d+)?$')
+    fail_msg: >-
+      upgrade_target_kubernetes_version and upgrade_target_kubernetes_deb_revision
+      must be concrete package coordinates such as 1.31.0 and 1.1.
+  when: upgrade_maintenance_scope != 'os'
+  delegate_to: localhost
+
+- name: Derive current and target semantic version components
+  ansible.builtin.set_fact:
+    cluster_current_version_parts: "{{ cluster_current_kubernetes_version.split('.') | map('int') | list }}"
+    cluster_target_version_parts: "{{ upgrade_effective_target_kubernetes_version.split('.') | map('int') | list }}"
+  when: upgrade_maintenance_scope != 'os'
+
+- name: Validate supported Kubernetes upgrade jump
+  ansible.builtin.assert:
+    that:
+      - cluster_target_version_parts[0] == cluster_current_version_parts[0]
+      - cluster_target_version_parts >= cluster_current_version_parts
+      - cluster_target_version_parts[1] >= cluster_current_version_parts[1]
+      - (cluster_target_version_parts[1] - cluster_current_version_parts[1]) <= 1
+    fail_msg: >-
+      Unsupported Kubernetes version jump from {{ cluster_current_kubernetes_version }}
+      to {{ upgrade_effective_target_kubernetes_version }}. Upgrade one minor version at a time.
+  when: upgrade_maintenance_scope != 'os'
+  delegate_to: localhost
+
+- name: Query cluster nodes
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_cluster_nodes
+  delegate_to: localhost
+
+- name: Capture cluster operating system image facts
+  ansible.builtin.set_fact:
+    upgrade_cluster_os_images: "{{ upgrade_cluster_nodes.resources | map(attribute='status.nodeInfo.osImage') | list }}"
+
+- name: Derive cluster operating system version facts
+  ansible.builtin.set_fact:
+    upgrade_cluster_os_versions: >-
+      {{
+        upgrade_cluster_os_images
+        | map('regex_replace', '^Ubuntu\\s+', '')
+        | map('regex_replace', '\\s+.*$', '')
+        | map('regex_replace', '^([0-9]+\\.[0-9]+).*$', '\\1')
+        | list
+      }}
+
+- name: Resolve cluster operating system version uniqueness
+  ansible.builtin.set_fact:
+    upgrade_cluster_os_versions_unique: >-
+      {{
+        upgrade_cluster_os_versions | unique | list
+      }}
+
+- name: Resolve cluster current operating system version
+  ansible.builtin.set_fact:
+    cluster_current_os_version: >-
+      {{
+        (upgrade_cluster_os_versions_unique | first) | default('')
+      }}
+
+- name: Normalize cluster current operating system version
+  ansible.builtin.set_fact:
+    cluster_current_os_version_normalized: >-
+      {{
+        (cluster_current_os_version.split() | last)
+        if cluster_current_os_version | length > 0
+        else ''
+      }}
+  delegate_to: localhost
+
+- name: Validate Ubuntu release-upgrade prerequisites
+  ansible.builtin.assert:
+    that:
+      - upgrade_cluster_nodes.resources | length > 0
+      - >-
+        (
+          upgrade_cluster_os_images
+          | select('match', '^Ubuntu\\s+[0-9]+\\.[0-9]+')
+          | list
+          | length
+        ) == (upgrade_cluster_os_images | length)
+      - >-
+        upgrade_target_os_version | length > 0
+        or upgrade_cluster_os_versions_unique | length == 1
+      - >-
+        upgrade_target_os_version | length > 0
+        or cluster_current_os_version_normalized in platform_release_catalog.os.supported_release_upgrade_targets
+    fail_msg: >-
+      Ubuntu release upgrades require Ubuntu nodes with a valid supported next hop.
+      Detected OS images={{ upgrade_cluster_os_images }}.
+      Set upgrade_target_os_version explicitly or extend
+      platform_release_catalog.os.supported_release_upgrade_targets.
+  when: upgrade_os_release_nodes | bool
+  delegate_to: localhost
+
+- name: Resolve effective Ubuntu release-upgrade target
+  ansible.builtin.set_fact:
+    upgrade_effective_target_os_version: >-
+      {{
+        upgrade_target_os_version
+        if upgrade_target_os_version | length > 0
+        else platform_release_catalog.os.supported_release_upgrade_targets[cluster_current_os_version_normalized]
+      }}
+  when: upgrade_os_release_nodes | bool
+  delegate_to: localhost
+
+- name: Report automatic Ubuntu next-hop target
+  ansible.builtin.debug:
+    msg: >-
+      No explicit Ubuntu target requested. Using supported next hop
+      {{ upgrade_effective_target_os_version }} for cluster Ubuntu
+      {{ cluster_current_os_version_normalized }}.
+  when:
+    - upgrade_os_release_nodes | bool
+    - upgrade_target_os_version | length == 0
+  delegate_to: localhost
+
+- name: Validate supported Ubuntu release-upgrade jump
+  ansible.builtin.assert:
+    that:
+      - upgrade_effective_target_os_version is match('^\\d+\\.\\d+$')
+      - >-
+        upgrade_target_os_version | length > 0
+        or cluster_current_os_version_normalized in platform_release_catalog.os.supported_release_upgrade_targets
+      - >-
+        upgrade_target_os_version | length > 0
+        or platform_release_catalog.os.supported_release_upgrade_targets[cluster_current_os_version_normalized]
+        == upgrade_effective_target_os_version
+    fail_msg: >-
+      Unsupported Ubuntu release jump from {{ cluster_current_os_version_normalized }}
+      to {{ upgrade_effective_target_os_version }}. Upgrade one supported hop at a time.
+  when: upgrade_os_release_nodes | bool
+  delegate_to: localhost
+
+- name: Validate supported Ubuntu release-upgrade hops for resumed mixed-version clusters
+  vars:
+    normalized_upgrade_cluster_os_version: "{{ item }}"
+  ansible.builtin.assert:
+    that:
+      - >-
+        normalized_upgrade_cluster_os_version == upgrade_effective_target_os_version
+        or normalized_upgrade_cluster_os_version in platform_release_catalog.os.supported_release_upgrade_targets
+      - >-
+        normalized_upgrade_cluster_os_version == upgrade_effective_target_os_version
+        or platform_release_catalog.os.supported_release_upgrade_targets[normalized_upgrade_cluster_os_version]
+        == upgrade_effective_target_os_version
+    fail_msg: >-
+      Unsupported Ubuntu release jump from {{ normalized_upgrade_cluster_os_version }}
+      to {{ upgrade_effective_target_os_version }}. Upgrade one supported hop at a time.
+  loop: "{{ upgrade_cluster_os_versions_unique }}"
+  when:
+    - upgrade_os_release_nodes | bool
+    - upgrade_target_os_version | length > 0
+  delegate_to: localhost
+
+- name: Capture pre-upgrade snapshot
+  ansible.builtin.include_role:
+    name: k8s_upgrade_snapshot
+  vars:
+    k8s_upgrade_snapshot_target_file: "{{ upgrade_pre_snapshot_file_resolved }}"
+  when: upgrade_capture_snapshots | bool
+
+- name: Assert that at least one control-plane node was discovered
+  ansible.builtin.assert:
+    that:
+      - groups['control_plane'] is defined
+      - groups['control_plane'] | length > 0
+    fail_msg: >-
+      No control-plane nodes were discovered. Run discovery first or review the generated inventory.
+  delegate_to: localhost
+
+- name: Assert that all cluster nodes are Ready before upgrade
+  ansible.builtin.assert:
+    that:
+      - upgrade_cluster_nodes.resources | length > 0
+      - (captured_upgrade_snapshot.summary.ready_node_count | int) == (captured_upgrade_snapshot.summary.node_count | int)
+    fail_msg: >-
+      Cluster contains at least one node that is not Ready. Resolve health issues before upgrading.
+  when: upgrade_capture_snapshots | bool
+  delegate_to: localhost
+
+- name: Derive disruption-risk workload facts from snapshot
+  ansible.builtin.set_fact:
+    upgrade_single_replica_workloads: "{{ captured_upgrade_snapshot.single_replica_workloads | default([]) }}"
+    upgrade_pdb_unprotected_workloads: "{{ captured_upgrade_snapshot.pdb_unprotected_workloads | default([]) }}"
+  when: upgrade_capture_snapshots | bool
+
+- name: Show single replica workload findings
+  ansible.builtin.debug:
+    msg: >-
+      Single-replica workloads outside exempt namespaces:
+      {{
+        upgrade_single_replica_workloads
+        | map(attribute='namespace')
+        | zip(upgrade_single_replica_workloads | map(attribute='name'))
+        | map('join', '/')
+        | list
+      }}
+  when: upgrade_single_replica_workloads | length > 0
+  delegate_to: localhost
+
+- name: Show workloads without matching PodDisruptionBudget
+  ansible.builtin.debug:
+    msg: >-
+      Replicated workloads without matching PodDisruptionBudget:
+      {{
+        upgrade_pdb_unprotected_workloads
+        | map(attribute='namespace')
+        | zip(upgrade_pdb_unprotected_workloads | map(attribute='name'))
+        | map('join', '/')
+        | list
+      }}
+  when: upgrade_pdb_unprotected_workloads | length > 0
+  delegate_to: localhost
+
+- name: Block upgrade when single-replica legacy workloads are present
+  ansible.builtin.assert:
+    that:
+      - upgrade_single_replica_workloads | length == 0
+    fail_msg: >-
+      Detected single-replica workloads outside exempt namespaces. Scale them out,
+      move them into an exempt namespace or set upgrade_allow_single_replica_workloads
+      to true to accept disruption risk explicitly.
+  when:
+    - upgrade_capture_snapshots | bool
+    - upgrade_enforce_replicated_workloads | bool
+    - not upgrade_allow_single_replica_workloads | bool
+  delegate_to: localhost
+
+- name: Block upgrade when replicated workloads lack PodDisruptionBudget protection
+  ansible.builtin.assert:
+    that:
+      - upgrade_pdb_unprotected_workloads | length == 0
+    fail_msg: >-
+      Detected replicated workloads without matching PodDisruptionBudget protection.
+      Add PDBs or set upgrade_require_pdb_protection to false to proceed explicitly.
+  when:
+    - upgrade_capture_snapshots | bool
+    - upgrade_require_pdb_protection | bool
+  delegate_to: localhost
+
+- name: Dry-run drain for every cluster node
+  vars:
+    upgrade_drain_flags:
+      - --ignore-daemonsets
+      - "--grace-period={{ upgrade_drain_grace_period }}"
+      - "--timeout={{ upgrade_drain_timeout }}"
+      - --dry-run=server
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['kubectl', 'drain', item]
+        + upgrade_drain_flags
+        + (['--delete-emptydir-data'] if upgrade_delete_emptydir_data | bool else [])
+        + (['--force'] if upgrade_force_drain | bool else [])
+      }}
+  loop: "{{ groups['cluster'] | default([]) }}"
+  changed_when: false
+  delegate_to: localhost
+  when: upgrade_execution_mode in ['apply', 'dry-run']
+
+- name: Run kubeadm upgrade plan on the primary control-plane node
+  ansible.builtin.command:
+    argv:
+      - kubeadm
+      - upgrade
+      - plan
+      - "v{{ upgrade_effective_target_kubernetes_version }}"
+  register: kubeadm_upgrade_plan
+  changed_when: false
+  when:
+    - upgrade_require_kubeadm_plan | bool
+    - upgrade_maintenance_scope != 'os'
+  become: true
+  delegate_to: "{{ groups['control_plane'][0] }}"
+
+- name: Persist upgrade plan summary
+  ansible.builtin.copy:
+    dest: "{{ upgrade_plan_file }}"
+    mode: "0640"
+    content: |
+      {{
+        {
+          'generated_at': lookup('ansible.builtin.pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'),
+          'discovery_source': hostvars['localhost'].cluster_discovery_source | default(cluster_discovery_strategy),
+          'current_os_images': upgrade_cluster_os_images,
+          'current_os_version': cluster_current_os_version_normalized,
+          'requested_target_os_version': upgrade_target_os_version,
+          'target_os_version': (upgrade_effective_target_os_version | default('')),
+          'os_release_nodes': upgrade_os_release_nodes,
+          'current_kubernetes_version': cluster_current_kubernetes_version,
+          'requested_target_kubernetes_version': upgrade_target_kubernetes_version,
+          'target_kubernetes_version': (upgrade_effective_target_kubernetes_version | default('')),
+          'target_kubernetes_deb_revision': (upgrade_effective_target_kubernetes_deb_revision | default('')),
+          'execution_mode': upgrade_execution_mode,
+          'maintenance_scope': upgrade_maintenance_scope,
+          'control_plane_nodes': groups['control_plane'] | default([]),
+          'worker_nodes': groups['workers'] | default([]),
+          'single_replica_workloads': upgrade_single_replica_workloads,
+          'pdb_unprotected_workloads': upgrade_pdb_unprotected_workloads,
+          'pre_snapshot_file': (upgrade_pre_snapshot_file_resolved if upgrade_capture_snapshots | bool else ''),
+          'kubeadm_plan_stdout': (kubeadm_upgrade_plan.stdout | default(''))
+        } | to_nice_json
+      }}
+  delegate_to: localhost
+
+- name: Show upgrade plan artifact path
+  ansible.builtin.debug:
+    msg: "Upgrade plan written to {{ upgrade_plan_file }}"
+  delegate_to: localhost

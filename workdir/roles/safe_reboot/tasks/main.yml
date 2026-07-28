@@ -1,0 +1,123 @@
+---
+- name: Capture boot identifier before scheduled reboot
+  ansible.builtin.command:
+    argv:
+      - cat
+      - /proc/sys/kernel/random/boot_id
+  register: safe_reboot_boot_id_before
+  changed_when: false
+  become: true
+
+- name: Schedule reboot outside the current SSH session
+  ansible.builtin.command:
+    argv:
+      - systemd-run
+      - "--unit=ansible-safe-reboot-{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '-') }}-{{ ansible_date_time.epoch }}"
+      - --description=Scheduled reboot requested by Ansible upgrade flow
+      - --on-active=2s
+      - /usr/bin/systemctl
+      - --force
+      - reboot
+  async: 45
+  poll: 0
+  changed_when: true
+  become: true
+
+- name: Wait for SSH to stop after scheduled reboot
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host | default(inventory_hostname) }}"
+    port: "{{ ansible_port | default(22) }}"
+    state: stopped
+    timeout: "{{ safe_reboot_shutdown_timeout | default(300) }}"
+    connect_timeout: 5
+    sleep: 2
+  delegate_to: localhost
+  become: false
+
+- name: Reset the cached SSH control connection before reconnecting
+  ansible.builtin.meta: reset_connection
+
+- name: Wait for SSH to return after reboot
+  block:
+    - name: Wait for SSH to return after reboot
+      ansible.builtin.wait_for_connection:
+        timeout: >-
+          {{
+            safe_reboot_ssh_timeout_before_k8s_recovery
+            | default(safe_reboot_timeout | default(3600))
+          }}
+        connect_timeout: "{{ safe_reboot_connect_timeout | default(10) }}"
+        delay: 5
+        sleep: 5
+  rescue:
+    - name: Fail when SSH recovery via Kubernetes is not enabled
+      ansible.builtin.fail:
+        msg: >-
+          SSH did not return after reboot on {{ inventory_hostname }} and
+          Kubernetes-based SSH recovery is disabled for this reboot flow.
+      when: not (safe_reboot_recover_ssh_via_kubernetes | default(false))
+
+    - name: Wait until the rebooted node is Ready in Kubernetes before SSH recovery
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        name: "{{ safe_reboot_recovery_node_name | default(inventory_hostname) }}"
+        kubeconfig: "{{ safe_reboot_recovery_kubeconfig }}"
+      register: safe_reboot_recovery_node
+      retries: "{{ ((safe_reboot_timeout | default(3600)) // 10) | int }}"
+      delay: 10
+      until:
+        - safe_reboot_recovery_node.resources | length > 0
+        - >-
+          (
+            safe_reboot_recovery_node.resources[0].status.conditions
+            | selectattr('type', 'equalto', 'Ready')
+            | selectattr('status', 'equalto', 'True')
+            | list
+            | length
+          ) == 1
+      when: safe_reboot_recover_ssh_via_kubernetes | default(false)
+      delegate_to: localhost
+
+    - name: Re-enable SSH access through a Kubernetes node debug pod
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - debug
+          - "node/{{ safe_reboot_recovery_node_name | default(inventory_hostname) }}"
+          - "--image={{ safe_reboot_recovery_debug_image }}"
+          - --profile=sysadmin
+          - --
+          - chroot
+          - /host
+          - systemctl
+          - enable
+          - --now
+          - ssh.socket
+          - ssh.service
+      register: safe_reboot_k8s_recovery
+      changed_when: true
+      when: safe_reboot_recover_ssh_via_kubernetes | default(false)
+      delegate_to: localhost
+
+    - name: Reset the cached SSH control connection after Kubernetes-based recovery
+      ansible.builtin.meta: reset_connection
+
+    - name: Wait for SSH to return after Kubernetes-based recovery
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ safe_reboot_timeout | default(3600) }}"
+        connect_timeout: "{{ safe_reboot_connect_timeout | default(10) }}"
+        delay: 5
+        sleep: 5
+
+- name: Wait for boot identifier to change after reboot
+  ansible.builtin.command:
+    argv:
+      - cat
+      - /proc/sys/kernel/random/boot_id
+  register: safe_reboot_boot_id_after
+  until: safe_reboot_boot_id_after.stdout != safe_reboot_boot_id_before.stdout
+  retries: "{{ ((safe_reboot_timeout | default(3600)) // 15) | int }}"
+  delay: 15
+  changed_when: false
+  become: true

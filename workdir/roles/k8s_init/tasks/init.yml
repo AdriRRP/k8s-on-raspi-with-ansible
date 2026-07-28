@@ -1,0 +1,110 @@
+---
+- name: Validate requested kube-proxy and Calico dataplane combination
+  ansible.builtin.assert:
+    that:
+      - (kube_proxy_mode == 'nftables') == (calico_linux_dataplane == 'Nftables')
+    fail_msg: >-
+      kube_proxy_mode and calico_linux_dataplane must be switched together.
+      Use kube_proxy_mode=nftables with calico_linux_dataplane=Nftables, or leave both on iptables defaults.
+
+- name: Validate nftables kernel prerequisites
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel is version('5.13', '>=')
+    fail_msg: "kube-proxy nftables mode requires Linux kernel 5.13 or later."
+  when: kube_proxy_mode == 'nftables'
+
+- name: Check whether cluster CIDRs overlap each other or the node address
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import ipaddress, sys;
+        sys.exit(
+        0 if (
+        ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[2])
+        or ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[3])
+        or ipaddress.ip_network(sys.argv[2]).overlaps(ipaddress.ip_network(sys.argv[3]))
+        or not ipaddress.ip_network(sys.argv[2]).is_private
+        or not ipaddress.ip_network(sys.argv[3]).is_private
+        ) else 1
+        )
+      - "{{ ansible_default_ipv4.address }}"
+      - "{{ pod_network_cidr }}"
+      - "{{ service_network_cidr }}"
+  register: k8s_init_network_overlap
+  changed_when: false
+  failed_when: false
+
+- name: Reject overlapping cluster and node networks
+  ansible.builtin.assert:
+    that:
+      - k8s_init_network_overlap.rc != 0
+    fail_msg: >-
+      pod_network_cidr={{ pod_network_cidr }} and
+      service_network_cidr={{ service_network_cidr }} must be private, must not
+      overlap each other, and must not contain node address
+      {{ ansible_default_ipv4.address }}.
+
+- name: Render kubeadm init configuration
+  ansible.builtin.template:
+    src: kubeadm-init-config.yaml.j2
+    dest: "{{ k8s_init_kubeadm_config_path }}"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Validate kubeadm init configuration
+  ansible.builtin.command: kubeadm config validate --config {{ k8s_init_kubeadm_config_path }}
+  changed_when: false
+
+- name: Initialize Kubernetes cluster using kubeadm
+  ansible.builtin.command: kubeadm init --config={{ k8s_init_kubeadm_config_path }}
+  register: kubeadm_init_result
+  args:
+    creates: /etc/kubernetes/admin.conf
+
+- name: Save kubeadm init output to temporary file
+  ansible.builtin.copy:
+    content: "{{ kubeadm_init_result.stdout }}"
+    dest: /tmp/kubeadm-init.log
+    mode: '0600'
+  when: not (kubeadm_init_result.skipped | default(false))
+
+- name: Fetch kubeadm init log to control node
+  ansible.builtin.fetch:
+    src: /tmp/kubeadm-init.log
+    dest: "{{ kubernetes_outputs }}/kubeadm-init.log"
+    flat: true
+  when: not (kubeadm_init_result.skipped | default(false))
+
+- name: Extract kubeadm join command
+  ansible.builtin.command: kubeadm token create --print-join-command
+  register: kubeadm_join_command
+  changed_when: false
+  when: not (kubeadm_init_result.skipped | default(false))
+
+- name: Save join command to temporary file
+  ansible.builtin.copy:
+    content: "{{ kubeadm_join_command.stdout }}"
+    dest: /tmp/kubeadm_join_cmd.sh
+    mode: '0600'
+  when: kubeadm_join_command is defined and not (kubeadm_join_command.skipped | default(false))
+
+- name: Fetch join command file to control node
+  ansible.builtin.fetch:
+    src: /tmp/kubeadm_join_cmd.sh
+    dest: "{{ kubernetes_outputs }}/kubeadm_join_cmd.sh"
+    flat: true
+  when: kubeadm_join_command is defined and not (kubeadm_join_command.skipped | default(false))
+
+- name: Remove temporary kubeadm init artifacts from control plane node
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ k8s_init_kubeadm_config_path }}"
+    - /tmp/kubeadm-init.log
+    - /tmp/kubeadm_join_cmd.sh
+  when: not (kubeadm_init_result.skipped | default(false))

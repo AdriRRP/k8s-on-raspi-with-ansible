@@ -1,0 +1,4 @@
+---
+kubernetes_outputs: "/home/ansible/.kube/outputs/"
+join_command_src: "{{ kubernetes_outputs }}/kubeadm_join_cmd.sh"
+join_command_tmp: "/tmp/kubeadm_join_cmd.sh"

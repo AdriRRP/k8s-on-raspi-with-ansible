@@ -1,0 +1,27 @@
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd
+kubeReserved:
+  cpu: {{ kubelet_reserved_cpu }}
+  memory: {{ kubelet_reserved_memory }}
+  ephemeral-storage: {{ kubelet_reserved_ephemeral_storage }}
+systemReserved:
+  cpu: {{ kubelet_reserved_cpu }}
+  memory: {{ kubelet_reserved_memory }}
+  ephemeral-storage: {{ kubelet_reserved_ephemeral_storage }}
+enforceNodeAllocatable:
+  - pods
+imageGCHighThresholdPercent: {{ kubelet_image_gc_high_threshold_percent }}
+imageGCLowThresholdPercent: {{ kubelet_image_gc_low_threshold_percent }}
+nodeStatusMaxImages: {{ kubelet_node_status_max_images }}
+containerLogMaxSize: {{ kubelet_container_log_max_size }}
+containerLogMaxFiles: {{ kubelet_container_log_max_files }}
+evictionHard:
+  memory.available: {{ kubelet_eviction_memory_available }}
+  nodefs.available: "10%"
+  nodefs.inodesFree: "5%"
+  imagefs.available: "15%"
+serializeImagePulls: {{ 'true' if kubelet_serialize_image_pulls | bool else 'false' }}
+{% if not (kubelet_serialize_image_pulls | bool) %}
+maxParallelImagePulls: {{ kubelet_max_parallel_image_pulls }}
+{% endif %}

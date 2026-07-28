@@ -1,0 +1,18 @@
+---
+- name: Check if UFW is installed
+  ansible.builtin.command: which ufw
+  register: ufw_check
+  changed_when: false
+  failed_when: false
+
+- name: Check if UFW is active
+  ansible.builtin.command: ufw status
+  register: ufw_status
+  when: ufw_check.rc == 0
+  changed_when: false
+  failed_when: false
+
+- name: Set facts for UFW
+  ansible.builtin.set_fact:
+    ufw_installed: "{{ ufw_check.rc == 0 }}"
+    ufw_active: "{{ 'Status: active' in (ufw_status.stdout | default('')) }}"

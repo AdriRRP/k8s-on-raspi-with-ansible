@@ -1,7 +1,0 @@
-kubernetes_version: "1.31.0"
-kubernetes_minor_version: "{{ kubernetes_version.split('.')[:2] | join('.') }}"
-kubernetes_deb_revision: "1.1"
-
-# URLs base
-kubernetes_apt_key_url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor_version }}/deb/Release.key"
-kubernetes_apt_repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor_version }}/deb/ /"

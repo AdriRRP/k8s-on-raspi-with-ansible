@@ -1,0 +1,214 @@
+---
+- name: Create namespace for NFS provisioner
+  kubernetes.core.k8s:
+    state: present
+    kind: Namespace
+    name: "{{ nfs_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create ServiceAccount for NFS provisioner
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+        namespace: "{{ nfs_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create namespace Role for NFS provisioner leader election
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+        namespace: "{{ nfs_namespace }}"
+      rules:
+        - apiGroups: [""]
+          resources: ["endpoints"]
+          verbs: ["get", "list", "watch", "create", "update", "patch"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create namespace RoleBinding for NFS provisioner
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+        namespace: "{{ nfs_namespace }}"
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ nfs_provisioner_name }}"
+          namespace: "{{ nfs_namespace }}"
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: "{{ nfs_provisioner_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create ClusterRole for NFS provisioner
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+      rules:
+        - apiGroups: [""]
+          resources: ["persistentvolumes"]
+          verbs: ["get", "list", "watch", "create", "delete"]
+        - apiGroups: [""]
+          resources: ["persistentvolumeclaims"]
+          verbs: ["get", "list", "watch", "update"]
+        - apiGroups: ["storage.k8s.io"]
+          resources: ["storageclasses"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: [""]
+          resources: ["events"]
+          verbs: ["create", "update", "patch"]
+        - apiGroups: [""]
+          resources: ["nodes"]
+          verbs: ["get", "list", "watch"]
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Create ClusterRoleBinding for NFS provisioner
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ nfs_provisioner_name }}"
+          namespace: "{{ nfs_namespace }}"
+      roleRef:
+        kind: ClusterRole
+        name: "{{ nfs_provisioner_name }}"
+        apiGroup: rbac.authorization.k8s.io
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Deploy NFS provisioner
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+        namespace: "{{ nfs_namespace }}"
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+          rollingUpdate: null
+        selector:
+          matchLabels:
+            app: "{{ nfs_provisioner_name }}"
+        template:
+          metadata:
+            labels:
+              app: "{{ nfs_provisioner_name }}"
+          spec:
+            serviceAccountName: "{{ nfs_provisioner_name }}"
+            securityContext:
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: nfs-client-provisioner
+                image: "{{ nfs_provisioner_image }}"
+                imagePullPolicy: IfNotPresent
+                env:
+                  - name: PROVISIONER_NAME
+                    value: "example.com/{{ storage_class_name }}"
+                  - name: NFS_SERVER
+                    value: "{{ nfs_server }}"
+                  - name: NFS_PATH
+                    value: "{{ nfs_path }}"
+                volumeMounts:
+                  - name: nfs-volume
+                    mountPath: /persistentvolumes
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 128Mi
+                  limits:
+                    cpu: 250m
+                    memory: 256Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                      - ALL
+            volumes:
+              - name: nfs-volume
+                nfs:
+                  server: "{{ nfs_server }}"
+                  path: "{{ nfs_path }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait until NFS provisioner is ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ nfs_provisioner_name }}"
+    namespace: "{{ nfs_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: nfs_provisioner_deployment
+  retries: 12
+  delay: 5
+  until:
+    - nfs_provisioner_deployment.resources | length > 0
+    - >-
+      nfs_provisioner_deployment.resources[0].status.observedGeneration
+      | default(0) | int
+      >= nfs_provisioner_deployment.resources[0].metadata.generation
+      | default(0) | int
+    - >-
+      nfs_provisioner_deployment.resources[0].status.updatedReplicas
+      | default(0) | int
+      == nfs_provisioner_deployment.resources[0].spec.replicas
+      | default(1) | int
+    - >-
+      nfs_provisioner_deployment.resources[0].status.readyReplicas
+      | default(0) | int
+      == nfs_provisioner_deployment.resources[0].spec.replicas
+      | default(1) | int
+    - >-
+      nfs_provisioner_deployment.resources[0].status.availableReplicas
+      | default(0) | int
+      == nfs_provisioner_deployment.resources[0].spec.replicas
+      | default(1) | int
+  changed_when: false
+  delegate_to: localhost
+
+- name: Create StorageClass
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "{{ storage_class_name }}"
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "{{ 'true' if set_storageclass_default else 'false' }}"
+      provisioner: "example.com/{{ storage_class_name }}"
+      reclaimPolicy: Retain
+      allowVolumeExpansion: true
+      volumeBindingMode: Immediate
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost

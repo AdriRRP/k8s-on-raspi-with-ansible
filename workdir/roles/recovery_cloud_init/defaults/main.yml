@@ -1,0 +1,6 @@
+---
+recovery_seed_local_root: "{{ kubernetes_outputs }}/recovery-seeds"
+recovery_seed_ssh_public_key_path: "/home/ansible/.ssh/id_ed25519.pub"
+recovery_seed_bootstrap_user_groups:
+  - adm
+  - sudo

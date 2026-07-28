@@ -1,0 +1,12 @@
+---
+- name: Initialize Kubernetes control plane
+  ansible.builtin.import_tasks: init.yml
+
+- name: Configure kubeconfig locally
+  ansible.builtin.import_tasks: kubeconfig.yml
+
+- name: Install Calico CNI
+  ansible.builtin.import_tasks: cni.yml
+
+- name: Allow scheduling on control-plane
+  ansible.builtin.import_tasks: taint.yml

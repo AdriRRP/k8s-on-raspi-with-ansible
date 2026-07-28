@@ -1,11 +1,13 @@
+---
 kubeconfig_local_path: /home/ansible/.kube/config
 monitoring_namespace: monitoring
+grafana_image: "{{ platform_release_catalog.observability.grafana_image }}"
 grafana_admin_user: admin
-grafana_admin_password: admin
+grafana_admin_password: ""
+grafana_service_type: ClusterIP
 storage_class_name: raspi-nfs-provisioner
-
-grafana_dashboards:
-  - id: 1860
-    name: node-exporter-full
-  - id: 13332
-    name: kube-state-metrics
+grafana_runtime_node_name: ""
+grafana_provision_bundled_dashboards: false
+grafana_force_reset_persistent_state: false
+grafana_auto_reset_persistent_state_on_provisioning_failure: false
+grafana_provisioning_failure_log_pattern: "Datasource provisioning error: data source not found"

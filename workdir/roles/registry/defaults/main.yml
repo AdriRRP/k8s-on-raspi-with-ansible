@@ -1,10 +1,11 @@
-registry_namespace: kube-system
+---
+registry_namespace: registry
 registry_name: registry
 registry_port: 5000
-registry_pvc_enabled: false
-
-# Optional for LoadBalancer exposure via MetalLB
-registry_expose_lb: true
-registry_lb_ip: 192.168.0.250
-
+registry_image: "{{ platform_release_catalog.storage.registry_image }}"
+registry_service_type: "{{ 'LoadBalancer' if registry_expose_lb | bool else 'ClusterIP' }}"
+registry_storage_class_name: raspi-nfs-provisioner
+registry_persistence_enabled: true
+registry_pvc_size: 20Gi
+registry_lb_ip: ""
 kubeconfig_local_path: /home/ansible/.kube/config

@@ -1,0 +1,9 @@
+---
+- name: Include SSH key generation tasks
+  ansible.builtin.import_tasks: generate.yml
+
+- name: Include SSH key exchange tasks
+  ansible.builtin.import_tasks: exchange.yml
+
+- name: Include SSH verification tasks
+  ansible.builtin.import_tasks: verify.yml

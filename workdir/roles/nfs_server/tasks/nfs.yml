@@ -1,0 +1,40 @@
+---
+- name: Ensure APT repositories are healthy before NFS package install
+  ansible.builtin.include_role:
+    name: apt_resilience
+
+- name: Install NFS server
+  ansible.builtin.apt:
+    name: nfs-kernel-server
+    state: present
+    update_cache: true
+  become: true
+
+- name: Export NFS directory
+  ansible.builtin.lineinfile:
+    path: /etc/exports
+    line: "{{ nfs_export_mount }} {{ nfs_clients_subnet }}(rw,sync,root_squash,no_subtree_check)"
+    state: present
+    create: true
+    mode: '0644'
+  become: true
+
+- name: Reload NFS exports
+  ansible.builtin.command: exportfs -ra
+  changed_when: false
+  become: true
+
+- name: Enable and start NFS service
+  ansible.builtin.systemd:
+    name: nfs-kernel-server
+    enabled: true
+    state: started
+  become: true
+
+- name: Set permissions and ownership for NFS export
+  ansible.builtin.file:
+    path: "{{ nfs_export_mount }}"
+    owner: "{{ nfs_export_owner }}"
+    group: "{{ nfs_export_group }}"
+    mode: "{{ nfs_export_mode }}"
+  become: true

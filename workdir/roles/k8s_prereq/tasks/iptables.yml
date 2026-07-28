@@ -1,0 +1,31 @@
+---
+- name: Remove legacy broad Kubernetes TCP accept rules
+  ansible.builtin.shell: >
+    iptables -D INPUT -p tcp --dport {{ item }} -j ACCEPT 2>/dev/null || true
+  loop: "{{ k8s_prereq_legacy_static_ports }}"
+  become: true
+  changed_when: false
+
+- name: Remove legacy broad NodePort accept rule
+  ansible.builtin.shell: >
+    iptables -D INPUT -p tcp --dport
+    {{ k8s_prereq_legacy_node_port_range }} -j ACCEPT 2>/dev/null || true
+  become: true
+  changed_when: false
+
+- name: Check for legacy persistent iptables rules
+  ansible.builtin.stat:
+    path: /etc/iptables/rules.v4
+  register: k8s_prereq_persistent_iptables
+  become: true
+
+- name: Remove legacy broad accepts from persistent iptables rules
+  ansible.builtin.replace:
+    path: /etc/iptables/rules.v4
+    regexp: >-
+      ^-A INPUT .*--dport
+      (2379|2380|6443|10250|10251|10252|30000:32767)
+      .* -j ACCEPT\n?
+    replace: ""
+  when: k8s_prereq_persistent_iptables.stat.exists
+  become: true

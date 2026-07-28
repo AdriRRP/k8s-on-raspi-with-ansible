@@ -1,0 +1,216 @@
+---
+- name: Freeze recovery bundle coordinates for this run
+  ansible.builtin.set_fact:
+    recovery_bundle_id_resolved: "{{ recovery_bundle_id }}"
+    recovery_bundle_remote_dir_resolved: "{{ recovery_bundle_remote_dir }}"
+    recovery_bundle_local_dir_resolved: "{{ recovery_bundle_local_dir }}"
+    recovery_bundle_etcd_snapshot_remote_path_resolved: "{{ recovery_bundle_etcd_snapshot_remote_path }}"
+
+- name: Ensure remote recovery bundle directory exists
+  ansible.builtin.file:
+    path: "{{ recovery_bundle_remote_dir_resolved }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  become: true
+
+- name: Detect current etcd image from static pod
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - "--kubeconfig={{ recovery_bundle_kubeconfig_path }}"
+      - get
+      - pod
+      - "{{ recovery_bundle_etcd_pod_name }}"
+      - -n
+      - kube-system
+      - -o
+      - "jsonpath={.spec.containers[0].image}"
+  register: recovery_bundle_etcd_image
+  changed_when: false
+  become: true
+
+- name: Read live kubeadm cluster configuration
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - "--kubeconfig={{ recovery_bundle_kubeconfig_path }}"
+      - get
+      - configmap
+      - kubeadm-config
+      - --namespace
+      - kube-system
+      - -o
+      - "jsonpath={.data.ClusterConfiguration}"
+  register: recovery_bundle_kubeadm_config_raw
+  changed_when: false
+  become: true
+
+- name: Resolve live Kubernetes version and pod CIDR
+  ansible.builtin.set_fact:
+    recovery_bundle_kubeadm_config: "{{ recovery_bundle_kubeadm_config_raw.stdout | from_yaml }}"
+    recovery_bundle_kubernetes_version_resolved: >-
+      {{
+        (recovery_bundle_kubeadm_config_raw.stdout | from_yaml).kubernetesVersion
+        | regex_replace('^v', '')
+      }}
+    recovery_bundle_pod_network_cidr_resolved: >-
+      {{
+        (recovery_bundle_kubeadm_config_raw.stdout | from_yaml).networking.podSubnet
+        | default(recovery_bundle_pod_network_cidr)
+      }}
+
+- name: Capture live etcd snapshot from control-plane pod
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - "--kubeconfig={{ recovery_bundle_kubeconfig_path }}"
+      - exec
+      - -n
+      - kube-system
+      - "{{ recovery_bundle_etcd_pod_name }}"
+      - --
+      - etcdctl
+      - "--cacert=/etc/kubernetes/pki/etcd/ca.crt"
+      - "--cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt"
+      - "--key=/etc/kubernetes/pki/etcd/healthcheck-client.key"
+      - "--endpoints=https://127.0.0.1:2379"
+      - snapshot
+      - save
+      - "{{ recovery_bundle_etcd_snapshot_remote_path_resolved }}"
+  register: recovery_bundle_snapshot
+  changed_when: "'Snapshot saved' in recovery_bundle_snapshot.stdout"
+  become: true
+
+- name: Copy etcd snapshot into recovery bundle workspace
+  ansible.builtin.shell: >
+    cp {{ recovery_bundle_etcd_snapshot_remote_path_resolved }}
+    {{ recovery_bundle_remote_dir_resolved }}/etcd-snapshot.db
+  args:
+    executable: /bin/bash
+  changed_when: true
+  become: true
+
+- name: Harden etcd snapshot permissions in recovery bundle workspace
+  ansible.builtin.file:
+    path: "{{ recovery_bundle_remote_dir_resolved }}/etcd-snapshot.db"
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+
+- name: Archive Kubernetes PKI
+  community.general.archive:
+    path: /etc/kubernetes/pki
+    dest: "{{ recovery_bundle_remote_dir_resolved }}/kubernetes-pki.tar.gz"
+    format: gz
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+
+- name: Archive Kubernetes static manifests
+  community.general.archive:
+    path: /etc/kubernetes/manifests
+    dest: "{{ recovery_bundle_remote_dir_resolved }}/kubernetes-manifests.tar.gz"
+    format: gz
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+
+- name: Copy admin kubeconfig into recovery bundle
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ recovery_bundle_remote_dir_resolved }}/admin.conf"
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0600'
+  become: true
+
+- name: Render kubeadm cluster recreation config into recovery bundle
+  ansible.builtin.copy:
+    dest: "{{ recovery_bundle_remote_dir_resolved }}/kubeadm-init-config.yaml"
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      apiVersion: kubeadm.k8s.io/v1beta4
+      kind: InitConfiguration
+      localAPIEndpoint:
+        advertiseAddress: "{{ ansible_host | default(inventory_hostname) }}"
+        bindPort: 6443
+      nodeRegistration:
+        name: "{{ inventory_hostname }}"
+        criSocket: unix:///run/containerd/containerd.sock
+      ---
+      apiVersion: kubeadm.k8s.io/v1beta4
+      kind: ClusterConfiguration
+      clusterName: kubernetes
+      kubernetesVersion: "v{{ recovery_bundle_kubernetes_version_resolved }}"
+      networking:
+        podSubnet: "{{ recovery_bundle_pod_network_cidr_resolved }}"
+      ---
+      apiVersion: kubeproxy.config.k8s.io/v1alpha1
+      kind: KubeProxyConfiguration
+      mode: {{ kube_proxy_mode }}
+  become: true
+
+- name: Write recovery bundle manifest
+  ansible.builtin.copy:
+    dest: "{{ recovery_bundle_remote_dir_resolved }}/manifest.json"
+    owner: root
+    group: root
+    mode: '0600'
+    content: |
+      {
+        "generated_at_utc": "{{ recovery_bundle_id_resolved }}",
+        "bundle_id": "{{ recovery_bundle_id_resolved }}",
+        "control_plane_node": "{{ inventory_hostname }}",
+        "control_plane_ip": "{{ ansible_host | default(inventory_hostname) }}",
+        "control_plane_interface_name": "{{ ansible_default_ipv4.interface | default('') }}",
+        "control_plane_interface_mac": "{{ ansible_default_ipv4.macaddress | default('') }}",
+        "control_plane_gateway": "{{ ansible_default_ipv4.gateway | default('') }}",
+        "control_plane_nameservers": {{ ansible_dns.nameservers | default([]) | to_json }},
+        "kubernetes_version": "{{ recovery_bundle_kubernetes_version_resolved }}",
+        "kubernetes_deb_revision": "{{ kubernetes_deb_revision }}",
+        "etcd_image": "{{ recovery_bundle_etcd_image.stdout }}",
+        "pod_network_cidr": "{{ recovery_bundle_pod_network_cidr_resolved }}",
+        "kube_proxy_mode": "{{ kube_proxy_mode }}",
+        "calico_linux_dataplane": "{{ calico_linux_dataplane }}"
+      }
+  become: true
+
+- name: Ensure local recovery bundle directory exists
+  ansible.builtin.file:
+    path: "{{ recovery_bundle_local_dir_resolved }}"
+    state: directory
+    mode: '0755'
+  delegate_to: localhost
+  become: false
+
+- name: Fetch recovery bundle artifacts to control node
+  ansible.builtin.fetch:
+    src: "{{ recovery_bundle_remote_dir_resolved }}/{{ item }}"
+    dest: "{{ recovery_bundle_local_dir_resolved }}/"
+    flat: true
+  loop:
+    - admin.conf
+    - etcd-snapshot.db
+    - kubeadm-init-config.yaml
+    - kubernetes-manifests.tar.gz
+    - kubernetes-pki.tar.gz
+    - manifest.json
+  become: true
+
+- name: Remove remote recovery bundle after successful fetch
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  when: not (recovery_bundle_retain_on_node | bool)
+  loop:
+    - "{{ recovery_bundle_remote_dir_resolved }}"
+    - "{{ recovery_bundle_etcd_snapshot_remote_path_resolved }}"
+  become: true

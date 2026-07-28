@@ -1,4 +1,12 @@
-- import_tasks: install.yml
-- import_tasks: verify.yml
-- import_tasks: config.yml
-- import_tasks: echo-test.yml
+---
+- name: Include MetalLB installation tasks
+  ansible.builtin.import_tasks: install.yml
+
+- name: Include MetalLB verification tasks
+  ansible.builtin.import_tasks: verify.yml
+
+- name: Include MetalLB configuration tasks
+  ansible.builtin.import_tasks: config.yml
+
+- name: Include MetalLB echo test tasks
+  ansible.builtin.import_tasks: echo-test.yml

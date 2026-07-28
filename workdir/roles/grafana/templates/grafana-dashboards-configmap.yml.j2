@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: {{ monitoring_namespace }}
+data:
+  cluster-overview.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "graphTooltip": 0,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "id": 1,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"expr": "count(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "refId": "A"}],
+          "title": "Ready Nodes",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "id": 2,
+          "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+          "targets": [{"expr": "count(kube_pod_info)", "refId": "A"}],
+          "title": "Known Pods",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {}, "overrides": []},
+          "gridPos": {"h": 9, "w": 24, "x": 0, "y": 8},
+          "id": 3,
+          "targets": [{"expr": "sum(rate(node_cpu_seconds_total{mode!=\"idle\"}[5m])) by (instance)", "legendFormat": "{{ '{{instance}}' }}", "refId": "A"}],
+          "title": "CPU Busy by Node",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "style": "dark",
+      "tags": ["kubernetes", "overview"],
+      "templating": {"list": []},
+      "time": {"from": "now-6h", "to": "now"},
+      "title": "Cluster Overview",
+      "uid": "cluster-overview",
+      "version": 1
+    }
+  workload-overview.json: |
+    {
+      "annotations": {"list": []},
+      "editable": true,
+      "graphTooltip": 0,
+      "panels": [
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {}, "overrides": []},
+          "gridPos": {"h": 9, "w": 12, "x": 0, "y": 0},
+          "id": 1,
+          "targets": [{"expr": "sum(kube_deployment_status_replicas_available) by (namespace)", "legendFormat": "{{ '{{namespace}}' }}", "refId": "A"}],
+          "title": "Available Deployments by Namespace",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {"defaults": {}, "overrides": []},
+          "gridPos": {"h": 9, "w": 12, "x": 12, "y": 0},
+          "id": 2,
+          "targets": [{"expr": "sum(kube_persistentvolumeclaim_resource_requests_storage_bytes) by (namespace)", "legendFormat": "{{ '{{namespace}}' }}", "refId": "A"}],
+          "title": "PVC Requested Storage by Namespace",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 39,
+      "style": "dark",
+      "tags": ["kubernetes", "workloads"],
+      "templating": {"list": []},
+      "time": {"from": "now-6h", "to": "now"},
+      "title": "Workload Overview",
+      "uid": "workload-overview",
+      "version": 1
+    }

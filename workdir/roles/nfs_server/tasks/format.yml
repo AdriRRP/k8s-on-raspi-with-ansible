@@ -1,0 +1,33 @@
+---
+- name: Require exact device confirmation before filesystem creation
+  ansible.builtin.assert:
+    that:
+      - nfs_format_confirm_device == nfs_export_device
+      - nfs_export_device is match('^/dev/')
+    fail_msg: >-
+      Refusing filesystem creation on {{ nfs_export_device }}. Set
+      nfs_format_confirm_device to the exact same device after verifying it.
+  when: nfs_format_device | bool
+
+- name: Stop NFS server to release disk (if running)
+  ansible.builtin.systemd:
+    name: nfs-kernel-server
+    state: stopped
+  when: nfs_format_device | bool
+  become: true
+  failed_when: false
+
+- name: Unmount volume if mounted
+  ansible.posix.mount:
+    path: "{{ nfs_export_mount }}"
+    state: absent
+  when: nfs_format_device | bool
+  become: true
+
+- name: Format device with ext4
+  community.general.filesystem:
+    fstype: ext4
+    dev: "{{ nfs_export_device }}"
+    force: false
+  when: nfs_format_device | bool
+  become: true
