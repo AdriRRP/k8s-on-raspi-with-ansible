@@ -65,3 +65,30 @@
     - common_tmpfiles_config is changed
   changed_when: false
   become: true
+
+- name: Inspect cloud-init logrotate transition files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  loop:
+    - /etc/logrotate.d/cloud-init
+    - /etc/logrotate.d/cloud-init-base
+  register: common_cloud_init_logrotate_files
+  when: common_repair_cloud_init_logrotate_transition | bool
+  become: true
+
+- name: Remove duplicate legacy cloud-init logrotate configuration
+  ansible.builtin.file:
+    path: /etc/logrotate.d/cloud-init
+    state: absent
+  notify:
+    - Verify logrotate configuration
+    - Clear the repaired logrotate service failure
+  when:
+    - common_repair_cloud_init_logrotate_transition | bool
+    - common_cloud_init_logrotate_files.results[0].stat.exists
+    - common_cloud_init_logrotate_files.results[1].stat.exists
+    - >-
+      common_cloud_init_logrotate_files.results[0].stat.checksum
+      == common_cloud_init_logrotate_files.results[1].stat.checksum
+  become: true

@@ -139,6 +139,13 @@ cluster_discovery_ssh_key_path: /home/ansible/.ssh/id_ed25519
 cluster_discovery_static_inventory_path: /home/ansible/workdir/inventory/hosts.ini
 cluster_discovery_output_path: "{{ kubernetes_outputs }}/discovered_inventory.json"
 
+performance_baseline_profile: observe
+performance_baseline_output_root: "{{ kubernetes_outputs }}/benchmarks"
+performance_baseline_run_id: ""
+performance_baseline_api_samples: 15
+performance_baseline_command_timeout_seconds: 15
+performance_baseline_repository_revision: unknown
+
 recovery_seed_bootstrap_user: "{{ ansible_user | default('ubuntu') }}"
 recovery_seed_cloud_init_package_update: false
 recovery_seed_network_mode: dhcp

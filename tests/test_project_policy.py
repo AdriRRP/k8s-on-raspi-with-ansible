@@ -51,8 +51,71 @@ class ProjectPolicyTests(unittest.TestCase):
 
         self.assertIn('dirname -- "${BASH_SOURCE[0]}"', wrapper)
         self.assertIn("--validate", wrapper)
+        self.assertIn("--baseline", wrapper)
+        self.assertIn("--reconcile-node-hygiene", wrapper)
         self.assertIn("--help", wrapper)
         self.assertNotIn('--name "${SCRIPT_NAME}"', wrapper)
+        self.assertNotIn("-b|--build", wrapper)
+
+    def test_baseline_is_observe_only_and_writes_below_runtime_outputs(self):
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
+        playbook = (
+            REPO_ROOT / "workdir" / "playbooks" / "25-capture-performance-baseline.yml"
+        ).read_text()
+
+        self.assertIn("performance_baseline_profile: observe", group_vars)
+        self.assertIn("{{ kubernetes_outputs }}/benchmarks", group_vars)
+        self.assertIn("performance_baseline_profile == 'observe'", playbook)
+        self.assertNotIn("kubernetes.core.k8s:", playbook)
+
+    def test_hygiene_reconciler_only_includes_bounded_task_files(self):
+        playbook = (
+            REPO_ROOT / "workdir" / "playbooks" / "26-reconcile-node-hygiene.yml"
+        ).read_text()
+
+        self.assertEqual(playbook.count("ansible.builtin.include_role:"), 2)
+        self.assertIn("tasks_from: housekeeping", playbook)
+        self.assertIn("tasks_from: iptables", playbook)
+        self.assertNotIn("\n  roles:", playbook)
+
+    def test_cluster_verification_uses_no_undeclared_jq_binary(self):
+        network_check = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_verify" / "tasks" / "network-check.yml"
+        ).read_text()
+
+        self.assertNotIn("jq ", network_check)
+        self.assertNotIn("json_query", network_check)
+        self.assertIn("jsonpath={.status.numberReady}", network_check)
+
+    def test_upgrade_roles_drop_become_when_delegating_to_control_host(self):
+        for role in ("k8s_upgrade_control_plane", "k8s_upgrade_workers"):
+            with self.subTest(role=role):
+                tasks = (REPO_ROOT / "workdir" / "roles" / role / "tasks" / "main.yml").read_text()
+                self.assertNotRegex(
+                    tasks,
+                    r"delegate_to: localhost\n(?!\s+become: false)",
+                )
+
+    def test_metallb_probe_requests_an_existing_echo_resource(self):
+        echo_test = (
+            REPO_ROOT / "workdir" / "roles" / "metallb" / "tasks" / "echo-test.yml"
+        ).read_text()
+
+        self.assertIn('"http://{{ echo_service_ip.stdout }}/hostname"', echo_test)
+
+    def test_kube_state_metrics_uses_a_numeric_non_root_identity(self):
+        deployment = (
+            REPO_ROOT
+            / "workdir"
+            / "roles"
+            / "kube_state_metrics"
+            / "templates"
+            / "ksm-deployment.yml.j2"
+        ).read_text()
+
+        self.assertIn("runAsNonRoot: true", deployment)
+        self.assertIn("runAsUser: 65534", deployment)
+        self.assertIn("runAsGroup: 65534", deployment)
 
     def test_shell_wrapper_rejects_ambiguous_options_before_docker(self):
         wrapper = REPO_ROOT / "cluster-control.sh"

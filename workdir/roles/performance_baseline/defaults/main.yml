@@ -1,0 +1,7 @@
+---
+performance_baseline_profile: observe
+performance_baseline_output_root: "{{ kubernetes_outputs }}/benchmarks"
+performance_baseline_run_id: ""
+performance_baseline_api_samples: 15
+performance_baseline_command_timeout_seconds: 15
+performance_baseline_repository_revision: unknown

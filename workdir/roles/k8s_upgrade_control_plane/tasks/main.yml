@@ -103,6 +103,7 @@
     state: directory
     mode: "0750"
   delegate_to: localhost
+  become: false
 
 - name: Report dry-run status for control-plane node
   ansible.builtin.debug:
@@ -134,6 +135,7 @@
       register: control_plane_cordon
       changed_when: "'already cordoned' not in control_plane_cordon.stdout"
       delegate_to: localhost
+      become: false
 
     - name: Drain control-plane node
       vars:
@@ -152,6 +154,7 @@
           }}
       changed_when: true
       delegate_to: localhost
+      become: false
 
     - name: Patch operating system packages on control-plane node
       ansible.builtin.apt:
@@ -301,6 +304,7 @@
             == ('v' ~ control_plane_target_kubernetes_version)
           )
       delegate_to: localhost
+      become: false
       changed_when: false
 
   rescue:
@@ -316,6 +320,7 @@
       changed_when: false
       failed_when: false
       delegate_to: localhost
+      become: false
 
     - name: Capture workloads scheduled on failed control-plane node
       ansible.builtin.command:
@@ -332,6 +337,7 @@
       changed_when: false
       failed_when: false
       delegate_to: localhost
+      become: false
 
     - name: Capture kubelet journal from failed control-plane node
       ansible.builtin.command:
@@ -368,6 +374,7 @@
             } | to_nice_json
           }}
       delegate_to: localhost
+      become: false
 
     - name: Persist control-plane rollback instructions
       ansible.builtin.copy:
@@ -394,6 +401,7 @@
           3. If needed, reinstall the previous package set manually and restore control-plane health before continuing.
           4. Do not proceed with additional node upgrades until this node is healthy again.
       delegate_to: localhost
+      become: false
 
     - name: Attempt to uncordon failed control-plane node
       ansible.builtin.command:
@@ -405,6 +413,7 @@
       changed_when: false
       failed_when: false
       delegate_to: localhost
+      become: false
 
     - name: Abort control-plane upgrade after failure
       ansible.builtin.fail:
@@ -426,3 +435,4 @@
       failed_when: false
       when: control_plane_apply_changes | bool
       delegate_to: localhost
+      become: false

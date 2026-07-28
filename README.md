@@ -210,6 +210,33 @@ Drain also refuses unmanaged Pods by default; use
 `-- -e upgrade_force_drain=true` only after inspecting them. Ephemeral
 `emptyDir` data is deleted during an accepted drain.
 
+## Performance baseline
+
+Capture a non-mutating point-in-time baseline:
+
+```bash
+./cluster-control.sh --baseline
+```
+
+The `observe` profile reads the Kubernetes API and each node over SSH. It does
+not install packages, deploy workloads or change node configuration. Every run
+creates `cluster.json`, one JSON document per node, `summary.json` and a concise
+`report.md` below:
+
+```text
+config/.kube/outputs/benchmarks/YYYYMMDDTHHMMSSZ/
+```
+
+Captured signals include API readiness latency, node and Pod health, CPU load
+and frequency policy, memory availability, Pressure Stall Information,
+temperature, Raspberry Pi throttling flags when `vcgencmd` is available, disk
+usage and counters, runtime storage, network counters, failed units, cumulative
+Pod restarts and drift from the catalogued Kubernetes version.
+
+Run the baseline several times under comparable idle conditions before treating
+a difference as a regression. Later load-generating CPU, network and storage
+profiles must remain explicit opt-ins with bounded writes and automatic cleanup.
+
 ## Raspberry Pi policy
 
 The default node policy favors stability and flash lifetime:
@@ -221,9 +248,18 @@ The default node policy favors stability and flash lifetime:
 - swap disabled
 - persisted Kubernetes networking modules and sysctls
 - no broad custom `iptables` accepts; active UFW trusts only `cluster_node_subnet`
+- stale persisted Kubernetes/Calico rule snapshots are detected and disabled
+- known duplicate cloud-init logrotate transitions are repaired only on checksum match
 - kubelet system reservations, image garbage collection and log rotation
 - serial package and node upgrades
 - optional admin utilities disabled unless `common_install_admin_tools` is enabled
+
+Reconcile these housekeeping protections without running the full node
+preparation lifecycle:
+
+```bash
+./cluster-control.sh --reconcile-node-hygiene
+```
 
 Networking defaults to kube-proxy `iptables` and Calico `Iptables`. The nftables
 path is opt-in and both components must be changed together:

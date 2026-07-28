@@ -1,0 +1,18 @@
+---
+- name: Reconcile node housekeeping and stale network persistence
+  hosts: cluster
+  become: true
+  gather_facts: false
+  serial: 1
+  max_fail_percentage: 0
+
+  tasks:
+    - name: Reconcile bounded housekeeping policies
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: housekeeping
+
+    - name: Reconcile stale network persistence
+      ansible.builtin.include_role:
+        name: k8s_prereq
+        tasks_from: iptables

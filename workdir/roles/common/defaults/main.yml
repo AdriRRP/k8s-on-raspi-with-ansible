@@ -20,6 +20,7 @@ common_tmp_cleanup_age: "7d"
 common_var_tmp_cleanup_age: "30d"
 
 common_enable_fstrim_timer: true
+common_repair_cloud_init_logrotate_transition: true
 
 common_required_packages:
   - ca-certificates

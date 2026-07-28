@@ -6,5 +6,6 @@ This directory is intentionally ignored by Git because it may contain:
 - kubeconfig files with client credentials
 - cluster join commands and other bootstrap outputs
 - generated service passwords
+- performance baselines, snapshots and reports
 
 Do not commit runtime files from this directory.

@@ -1,0 +1,2 @@
+---
+k8s_prereq_disable_dynamic_netfilter_persistence: true

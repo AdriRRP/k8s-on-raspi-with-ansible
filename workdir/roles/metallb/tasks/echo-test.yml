@@ -132,9 +132,18 @@
   delegate_to: localhost
 
 - name: Wait until echo-service is reachable via MetalLB IP from node network
-  ansible.builtin.command: >
-    kubectl exec -n default metallb-reachability-probe --kubeconfig={{ kubeconfig_local_path }} --
-    wget -qO- --timeout=5 http://{{ echo_service_ip.stdout }}
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - exec
+      - --namespace=default
+      - metallb-reachability-probe
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+      - --
+      - wget
+      - -qO-
+      - --timeout=5
+      - "http://{{ echo_service_ip.stdout }}/hostname"
   register: echo_response
   changed_when: false
   retries: 10

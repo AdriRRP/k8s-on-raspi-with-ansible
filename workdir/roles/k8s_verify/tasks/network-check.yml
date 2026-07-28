@@ -37,46 +37,77 @@
       delegate_to: localhost
 
     - name: Get number of Ready nodes
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl get nodes --no-headers --kubeconfig={{ kubeconfig_local_path }} | grep -c ' Ready'
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - nodes
+          - --output=name
+          - "--kubeconfig={{ kubeconfig_local_path }}"
       register: expected_pods
       changed_when: false
       delegate_to: localhost
-      args:
-        executable: /bin/bash
 
     - name: Wait for DaemonSet pods to be Ready
-      ansible.builtin.shell: |
-        set -o pipefail
-        kubectl get pods -l app={{ connectivity_daemonset_label }} -o json --kubeconfig={{ kubeconfig_local_path }} \
-        | jq '[.items[] | select(.status.conditions[]? | select(.type=="Ready" and .status=="True"))] | length'
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - daemonset
+          - "{{ connectivity_daemonset_name }}"
+          - --output=jsonpath={.status.numberReady}
+          - "--kubeconfig={{ kubeconfig_local_path }}"
       register: ready_pods
       retries: 20
       delay: 5
-      until: ready_pods.stdout | int == expected_pods.stdout | int
+      until: ready_pods.stdout | int == expected_pods.stdout_lines | length
       changed_when: false
       delegate_to: localhost
-      args:
-        executable: /bin/bash
 
     - name: Get list of pods and their IPs
-      ansible.builtin.shell: |
-        kubectl get pods -l app={{ connectivity_daemonset_label }} -o json --kubeconfig={{ kubeconfig_local_path }}
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - get
+          - pods
+          - --selector
+          - "app={{ connectivity_daemonset_label }}"
+          - --output=json
+          - "--kubeconfig={{ kubeconfig_local_path }}"
       register: pod_ips
       changed_when: false
       delegate_to: localhost
 
-    - name: Parse pod name and IPs into list
+    - name: Initialize connectivity Pod list
+      ansible.builtin.set_fact:
+        pod_info: []
+
+    - name: Parse pod names and IPs into native Ansible data
       ansible.builtin.set_fact:
         pod_info: >-
           {{
-            pod_ips.stdout | from_json | json_query('items[].{name: metadata.name, ip: status.podIP}')
+            pod_info
+            + [{'name': item.metadata.name, 'ip': item.status.podIP}]
           }}
+      loop: "{{ (pod_ips.stdout | from_json)['items'] }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
 
     - name: Check inter-node connectivity from each pod
-      ansible.builtin.shell: |
-        kubectl exec -n default {{ item.0.name }} --kubeconfig={{ kubeconfig_local_path }} -- ping -c 3 -W 2 {{ item.1.ip }}
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - exec
+          - --namespace=default
+          - "{{ item.0.name }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+          - --
+          - ping
+          - -c
+          - "3"
+          - -W
+          - "2"
+          - "{{ item.1.ip }}"
       loop: "{{ pod_info | product(pod_info) | list }}"
       loop_control:
         label: "Ping from {{ item.0.name }} to {{ item.1.name }}"

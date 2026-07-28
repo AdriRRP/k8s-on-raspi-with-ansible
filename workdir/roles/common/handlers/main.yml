@@ -4,3 +4,14 @@
     name: systemd-journald
     state: restarted
   become: true
+
+- name: Verify logrotate configuration
+  ansible.builtin.command: logrotate --debug /etc/logrotate.conf
+  changed_when: false
+  become: true
+
+- name: Clear the repaired logrotate service failure
+  ansible.builtin.systemd_service:
+    name: logrotate.service
+    state: started
+  become: true

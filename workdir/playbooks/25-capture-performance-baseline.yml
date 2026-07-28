@@ -1,0 +1,111 @@
+---
+- name: Initialize read-only cluster performance baseline
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate performance baseline profile
+      ansible.builtin.assert:
+        that:
+          - performance_baseline_profile == 'observe'
+          - performance_baseline_api_samples | int >= 3
+          - performance_baseline_api_samples | int <= 100
+          - performance_baseline_command_timeout_seconds | int >= 1
+          - performance_baseline_command_timeout_seconds | int <= 120
+        fail_msg: >-
+          Only the non-mutating observe profile is currently supported. API samples
+          must be 3-100 and command timeout must be 1-120 seconds.
+
+    - name: Resolve baseline run identifier
+      ansible.builtin.set_fact:
+        performance_baseline_run_id_resolved: >-
+          {{
+            performance_baseline_run_id
+            if performance_baseline_run_id | length > 0
+            else lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ')
+          }}
+
+    - name: Validate baseline run identifier
+      ansible.builtin.assert:
+        that:
+          - performance_baseline_run_id_resolved is match('^[0-9]{8}T[0-9]{6}Z$')
+        fail_msg: "performance_baseline_run_id must use UTC format YYYYMMDDTHHMMSSZ."
+
+    - name: Resolve baseline output directory
+      ansible.builtin.set_fact:
+        performance_baseline_run_dir_resolved: >-
+          {{
+            performance_baseline_output_root
+            ~ '/'
+            ~ performance_baseline_run_id_resolved
+          }}
+
+    - name: Create baseline output directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0750"
+      loop:
+        - "{{ performance_baseline_run_dir_resolved }}"
+        - "{{ performance_baseline_run_dir_resolved }}/nodes"
+
+    - name: Verify local kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ kubeconfig_local_path }}"
+      register: performance_baseline_kubeconfig
+
+    - name: Require local kubeconfig for cluster observation
+      ansible.builtin.assert:
+        that:
+          - performance_baseline_kubeconfig.stat.exists
+        fail_msg: "Kubeconfig not found at {{ kubeconfig_local_path }}."
+
+    - name: Capture read-only Kubernetes performance data
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/../tools/cluster_baseline.py"
+          - capture-cluster
+          - --kubeconfig
+          - "{{ kubeconfig_local_path }}"
+          - --output
+          - "{{ performance_baseline_run_dir_resolved }}/cluster.json"
+          - --api-samples
+          - "{{ performance_baseline_api_samples | string }}"
+          - --repository-revision
+          - "{{ performance_baseline_repository_revision }}"
+          - --expected-kubernetes-version
+          - "{{ kubernetes_version }}"
+      register: performance_baseline_cluster_capture
+      changed_when: false
+
+    - name: Report cluster capture status
+      ansible.builtin.debug:
+        var: performance_baseline_cluster_capture.stdout_lines
+
+- name: Capture read-only Linux node performance data
+  hosts: cluster
+  gather_facts: false
+
+  roles:
+    - role: performance_baseline
+
+- name: Build cluster performance baseline report
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Generate baseline summary and comparison
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/../tools/cluster_baseline.py"
+          - report
+          - --run-dir
+          - "{{ performance_baseline_run_dir_resolved }}"
+      register: performance_baseline_report
+      changed_when: false
+
+    - name: Report baseline artifacts
+      ansible.builtin.debug:
+        var: performance_baseline_report.stdout_lines

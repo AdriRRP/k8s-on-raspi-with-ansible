@@ -1,0 +1,34 @@
+---
+- name: Capture read-only node performance data
+  ansible.builtin.script:
+    cmd: >-
+      {{ playbook_dir }}/../tools/node_baseline.py
+      --timeout {{ performance_baseline_command_timeout_seconds }}
+    executable: python3
+  register: performance_baseline_node_capture
+  become: true
+  changed_when: false
+
+- name: Validate node performance capture
+  ansible.builtin.assert:
+    that:
+      - performance_baseline_node_capture.stdout | from_json is mapping
+      - (performance_baseline_node_capture.stdout | from_json).schema_version == 1
+      - (performance_baseline_node_capture.stdout | from_json).profile == 'observe'
+    fail_msg: "Node baseline collector returned invalid data for {{ inventory_hostname }}."
+
+- name: Persist node performance capture on the control host
+  ansible.builtin.copy:
+    dest: >-
+      {{
+        hostvars['localhost'].performance_baseline_run_dir_resolved
+      }}/nodes/{{ inventory_hostname }}.json
+    content: >-
+      {{
+        performance_baseline_node_capture.stdout
+        | from_json
+        | to_nice_json
+      }}
+    mode: "0640"
+  delegate_to: localhost
+  become: false

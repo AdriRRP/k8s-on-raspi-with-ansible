@@ -13,19 +13,56 @@
   become: true
   changed_when: false
 
-- name: Check for legacy persistent iptables rules
-  ansible.builtin.stat:
-    path: /etc/iptables/rules.v4
-  register: k8s_prereq_persistent_iptables
+- name: Gather service state before reconciling netfilter persistence
+  ansible.builtin.service_facts:
+  when: k8s_prereq_disable_dynamic_netfilter_persistence | bool
   become: true
 
-- name: Remove legacy broad accepts from persistent iptables rules
-  ansible.builtin.replace:
-    path: /etc/iptables/rules.v4
-    regexp: >-
-      ^-A INPUT .*--dport
-      (2379|2380|6443|10250|10251|10252|30000:32767)
-      .* -j ACCEPT\n?
-    replace: ""
-  when: k8s_prereq_persistent_iptables.stat.exists
+- name: Detect persisted Kubernetes or Calico rules
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Eqs
+      - (^|[-:])(KUBE|cali|CALI)
+      - "{{ item }}"
+  loop:
+    - /etc/iptables/rules.v4
+    - /etc/iptables/rules.v6
+  register: k8s_prereq_dynamic_persistent_rules
+  changed_when: false
+  failed_when: false
+  when:
+    - k8s_prereq_disable_dynamic_netfilter_persistence | bool
+    - "'netfilter-persistent.service' in ansible_facts.services"
+  become: true
+
+- name: Disable restoration of dynamic Kubernetes network snapshots
+  ansible.builtin.systemd_service:
+    name: netfilter-persistent.service
+    enabled: false
+    masked: true
+    state: stopped
+  when:
+    - k8s_prereq_disable_dynamic_netfilter_persistence | bool
+    - "'netfilter-persistent.service' in ansible_facts.services"
+    - >-
+      k8s_prereq_dynamic_persistent_rules.results
+      | selectattr('rc', 'defined')
+      | selectattr('rc', 'equalto', 0)
+      | list
+      | length > 0
+  become: true
+
+- name: Clear stale netfilter-persistent failure state
+  ansible.builtin.command: systemctl reset-failed netfilter-persistent.service
+  when:
+    - k8s_prereq_disable_dynamic_netfilter_persistence | bool
+    - "'netfilter-persistent.service' in ansible_facts.services"
+    - >-
+      k8s_prereq_dynamic_persistent_rules.results
+      | selectattr('rc', 'defined')
+      | selectattr('rc', 'equalto', 0)
+      | list
+      | length > 0
+  changed_when: false
   become: true

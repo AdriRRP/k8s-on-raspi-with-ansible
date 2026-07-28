@@ -54,8 +54,12 @@ Platform services:
   --nfs | --verify-nfs | --nfs-provisioner
   --metallb | --registry | --monitoring
 
+Performance:
+  --baseline                      Capture a read-only cluster baseline
+
 Maintenance:
   --status | --shutdown
+  --reconcile-node-hygiene
   --discover-cluster | --upgrade-plan | --upgrade-cluster
   --upgrade-latest-stable | --post-upgrade-reconcile
   --repair-apt-sources | --configure-k8s-repo
@@ -328,7 +332,7 @@ while [[ "$#" -gt 0 ]]; do
       done
       break
       ;;
-    -b|--build)
+    --build)
       build_image=true
       ;;
     --generate-key)
@@ -398,6 +402,15 @@ while [[ "$#" -gt 0 ]]; do
     --monitoring)
       mark_operation
       docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/13-setup-monitoring.yml"
+      ;;
+    --baseline)
+      mark_operation
+      baseline_repository_revision="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/25-capture-performance-baseline.yml -e performance_baseline_repository_revision=${baseline_repository_revision}"
+      ;;
+    --reconcile-node-hygiene)
+      mark_operation
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/26-reconcile-node-hygiene.yml"
       ;;
     --discover-cluster)
       mark_operation
