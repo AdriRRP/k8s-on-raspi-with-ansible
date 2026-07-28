@@ -56,6 +56,9 @@ Platform services:
 
 Performance:
   --baseline                      Capture a read-only cluster baseline
+  --benchmark                     Run bounded, ephemeral active benchmarks
+  --performance-profile           Apply one reversible tuning profile
+  --node-local-dns                Audit or explicitly manage NodeLocal DNS
 
 Maintenance:
   --status | --shutdown
@@ -407,6 +410,18 @@ while [[ "$#" -gt 0 ]]; do
       mark_operation
       baseline_repository_revision="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
       docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/25-capture-performance-baseline.yml -e performance_baseline_repository_revision=${baseline_repository_revision}"
+      ;;
+    --benchmark)
+      mark_operation
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/27-run-performance-benchmark.yml"
+      ;;
+    --performance-profile)
+      mark_operation
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/28-apply-performance-profile.yml"
+      ;;
+    --node-local-dns)
+      mark_operation
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/29-manage-node-local-dns.yml"
       ;;
     --reconcile-node-hygiene)
       mark_operation

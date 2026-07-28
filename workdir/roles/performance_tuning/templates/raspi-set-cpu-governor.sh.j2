@@ -1,0 +1,43 @@
+#!/bin/sh
+
+set -eu
+
+check_only=false
+if [ "${1:-}" = "--check" ]; then
+  check_only=true
+  shift
+fi
+
+governor="${1:-}"
+case "${governor}" in
+  ondemand | schedutil)
+    ;;
+  *)
+    echo "Unsupported CPU governor: ${governor}" >&2
+    exit 2
+    ;;
+esac
+
+matched=0
+for policy in /sys/devices/system/cpu/cpufreq/policy*; do
+  [ -d "${policy}" ] || continue
+  matched=$((matched + 1))
+  if ! grep -qw "${governor}" "${policy}/scaling_available_governors"; then
+    echo "${governor} is unavailable for ${policy}" >&2
+    exit 1
+  fi
+  if ${check_only}; then
+    current="$(cat "${policy}/scaling_governor")"
+    [ "${current}" = "${governor}" ] || {
+      echo "${policy} uses ${current}, expected ${governor}" >&2
+      exit 1
+    }
+  else
+    printf '%s\n' "${governor}" >"${policy}/scaling_governor"
+  fi
+done
+
+[ "${matched}" -gt 0 ] || {
+  echo "No CPU frequency policies found" >&2
+  exit 1
+}

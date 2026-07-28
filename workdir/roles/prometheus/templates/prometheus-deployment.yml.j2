@@ -13,6 +13,8 @@ spec:
       app: prometheus
   template:
     metadata:
+      annotations:
+        checksum/config: "{{ lookup('template', 'prometheus-configmap.yml.j2') | hash('sha256') }}"
       labels:
         app: prometheus
     spec:

@@ -1,0 +1,53 @@
+---
+- name: Run bounded active cluster performance benchmark
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Require explicit active-safe benchmark profile
+      ansible.builtin.assert:
+        that:
+          - performance_benchmark_profile == 'active-safe'
+          - performance_benchmark_experiment is match('^[a-z0-9][a-z0-9-]{0,31}$')
+        fail_msg: >-
+          Set performance_benchmark_profile=active-safe and use a short,
+          lowercase experiment name.
+
+    - name: Verify local kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ kubeconfig_local_path }}"
+      register: performance_benchmark_kubeconfig
+
+    - name: Require local kubeconfig
+      ansible.builtin.assert:
+        that:
+          - performance_benchmark_kubeconfig.stat.exists
+        fail_msg: "Kubeconfig not found at {{ kubeconfig_local_path }}."
+
+    - name: Execute bounded active-safe benchmark
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/../tools/cluster_benchmark.py"
+          - --kubeconfig
+          - "{{ kubeconfig_local_path }}"
+          - --output-root
+          - "{{ performance_benchmark_output_root }}"
+          - --image
+          - "{{ platform_smoke_test_image }}"
+          - --experiment
+          - "{{ performance_benchmark_experiment }}"
+          - --api-samples
+          - "{{ performance_benchmark_api_samples | string }}"
+          - --pod-startup-samples
+          - "{{ performance_benchmark_pod_startup_samples | string }}"
+          - --dns-queries
+          - "{{ performance_benchmark_dns_queries_per_node | string }}"
+          - --network-transfer-mib
+          - "{{ performance_benchmark_network_transfer_mib_per_node | string }}"
+      register: performance_benchmark_result
+      changed_when: true
+
+    - name: Report active benchmark artifact
+      ansible.builtin.debug:
+        var: performance_benchmark_result.stdout_lines

@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply the validated Raspberry Pi CPU frequency governor
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/raspi-set-cpu-governor {{ performance_tuning_cpu_governor }}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

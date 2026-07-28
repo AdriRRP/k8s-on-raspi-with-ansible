@@ -1,0 +1,66 @@
+---
+- name: Validate performance tuning profile
+  ansible.builtin.assert:
+    that:
+      - performance_tuning_profile in ['control', 'schedutil', 'parallel-pulls']
+      - performance_tuning_parallel_image_pulls | int >= 2
+      - performance_tuning_parallel_image_pulls | int <= 4
+    fail_msg: "Use control, schedutil or parallel-pulls with 2-4 parallel pulls."
+
+- name: Resolve requested CPU governor
+  ansible.builtin.set_fact:
+    performance_tuning_cpu_governor: >-
+      {{
+        performance_tuning_cpu_governor_experiment
+        if performance_tuning_profile == 'schedutil'
+        else performance_tuning_cpu_governor_control
+      }}
+  when: performance_tuning_profile in ['control', 'schedutil']
+
+- name: Install bounded CPU governor helper
+  ansible.builtin.template:
+    src: raspi-set-cpu-governor.sh.j2
+    dest: /usr/local/sbin/raspi-set-cpu-governor
+    owner: root
+    group: root
+    mode: '0755'
+  when: performance_tuning_profile in ['control', 'schedutil']
+  become: true
+
+- name: Install persistent CPU governor service
+  ansible.builtin.template:
+    src: raspi-cpu-governor.service.j2
+    dest: /etc/systemd/system/raspi-cpu-governor.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: performance_tuning_profile in ['control', 'schedutil']
+  become: true
+
+- name: Apply selected CPU governor
+  ansible.builtin.systemd_service:
+    name: raspi-cpu-governor.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+  when: performance_tuning_profile in ['control', 'schedutil']
+  become: true
+
+- name: Verify selected CPU governor
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/raspi-set-cpu-governor
+      - --check
+      - "{{ performance_tuning_cpu_governor }}"
+  when: performance_tuning_profile in ['control', 'schedutil']
+  changed_when: false
+  become: true
+
+- name: Apply kubelet image pull profile
+  ansible.builtin.include_role:
+    name: k8s_install
+    tasks_from: configure-kubelet
+  vars:
+    kubelet_serialize_image_pulls: "{{ performance_tuning_profile == 'control' }}"
+    kubelet_max_parallel_image_pulls: "{{ performance_tuning_parallel_image_pulls }}"
+  when: performance_tuning_profile in ['control', 'parallel-pulls']

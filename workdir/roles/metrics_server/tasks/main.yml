@@ -1,0 +1,134 @@
+---
+- name: Detect cluster version for Metrics Server compatibility
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - version
+      - --output=json
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: metrics_server_cluster_version_raw
+  changed_when: false
+  delegate_to: localhost
+  when: metrics_server_compatibility_minor_version == 'auto'
+
+- name: Resolve Metrics Server compatibility target
+  ansible.builtin.set_fact:
+    metrics_server_compatibility_minor_version_resolved: >-
+      {{
+        metrics_server_compatibility_minor_version
+        if metrics_server_compatibility_minor_version != 'auto'
+        else (
+          (
+            (metrics_server_cluster_version_raw.stdout | from_json).serverVersion.gitVersion
+            | regex_replace('^v', '')
+          ).split('.')[:2] | join('.')
+        )
+      }}
+    metrics_server_image_resolved: >-
+      {{
+        metrics_server_supported_images.get(
+          (
+            metrics_server_compatibility_minor_version
+            if metrics_server_compatibility_minor_version != 'auto'
+            else (
+              (
+                (metrics_server_cluster_version_raw.stdout | from_json).serverVersion.gitVersion
+                | regex_replace('^v', '')
+              ).split('.')[:2] | join('.')
+            )
+          ),
+          metrics_server_default_image
+        )
+      }}
+  delegate_to: localhost
+
+- name: Assert the cluster has a supported Metrics Server release
+  ansible.builtin.assert:
+    that:
+      - metrics_server_compatibility_minor_version_resolved in metrics_server_supported_images
+    fail_msg: >-
+      Kubernetes {{ metrics_server_compatibility_minor_version_resolved }} has no validated
+      Metrics Server image in platform_release_catalog.observability.metrics_server_images.
+  delegate_to: localhost
+
+- name: Deploy Metrics Server resources
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'metrics-server.yml.j2') | from_yaml_all | list }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Wait until Metrics Server deployment is updated and ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: kube-system
+    name: metrics-server
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: metrics_server_deployment
+  retries: 24
+  delay: 5
+  until:
+    - metrics_server_deployment.resources | length == 1
+    - >-
+      metrics_server_deployment.resources[0].status.observedGeneration | default(0) | int
+      >= metrics_server_deployment.resources[0].metadata.generation | default(0) | int
+    - >-
+      metrics_server_deployment.resources[0].status.availableReplicas | default(0) | int
+      == metrics_server_deployment.resources[0].spec.replicas | int
+  changed_when: false
+
+- name: Wait until the Kubernetes Metrics API is available
+  kubernetes.core.k8s_info:
+    api_version: apiregistration.k8s.io/v1
+    kind: APIService
+    name: v1beta1.metrics.k8s.io
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: metrics_server_api_service
+  retries: 24
+  delay: 5
+  until:
+    - metrics_server_api_service.resources | length == 1
+    - >-
+      metrics_server_api_service.resources[0].status.conditions
+      | default([])
+      | selectattr('type', 'equalto', 'Available')
+      | selectattr('status', 'equalto', 'True')
+      | list
+      | length
+      == 1
+  changed_when: false
+
+- name: Verify node resource metrics through the aggregated API
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - top
+      - nodes
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: metrics_server_top_nodes
+  retries: 18
+  delay: 5
+  until:
+    - metrics_server_top_nodes.rc == 0
+    - metrics_server_top_nodes.stdout_lines | length > 1
+  changed_when: false
+
+- name: Verify pod resource metrics through the aggregated API
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - top
+      - pods
+      - --all-namespaces
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: metrics_server_top_pods
+  retries: 18
+  delay: 5
+  until:
+    - metrics_server_top_pods.rc == 0
+    - metrics_server_top_pods.stdout_lines | length > 1
+  changed_when: false
+
+- name: Confirm Kubernetes resource metrics availability
+  ansible.builtin.debug:
+    msg: Metrics API is available for Lens, kubectl top and resource-based autoscaling.

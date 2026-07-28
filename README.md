@@ -116,6 +116,7 @@ Important defaults:
 | Service network | `10.96.0.0/12`, must not overlap node or pod networks |
 | Registry | persistent, internal `ClusterIP` |
 | Prometheus | 7-day retention, 10 GiB PVC |
+| Metrics Server | native CPU/memory Metrics API for Lens, `kubectl top` and HPA |
 | Grafana | internal `ClusterIP`, generated admin password |
 
 Pod and Service CIDRs are immutable installation decisions. The defaults above
@@ -134,6 +135,38 @@ Access internal services without exposing them to the LAN:
 
 The Grafana password is stored in
 `config/.kube/outputs/grafana-admin-password`.
+
+### Lens metrics
+
+The monitoring playbook deploys two complementary sources: Prometheus for
+historical monitoring and Metrics Server for Kubernetes' current CPU/memory
+resource API. In Lens, open the cluster settings with `Cmd+Shift+T`, select
+`Metrics`, set `Metrics Source` to `Prometheus`, then change the Prometheus query
+format from `Auto Detect Prometheus` to `Helm`. This reveals the service address
+field; enter:
+
+```text
+monitoring/prometheus:9090
+```
+
+Click outside the field to persist it. Do not enable the bundled stack under
+`Lens Metrics`, because this repository already manages Prometheus,
+node-exporter and kube-state-metrics. The Prometheus role validates the metric
+names and node labels used by Lens before completing.
+
+Metrics Server uses the official aggregated API and is deliberately not treated
+as a historical monitoring backend. Verify both paths with:
+
+```bash
+kubectl --kubeconfig config/.kube/config top nodes
+kubectl --kubeconfig config/.kube/config get --raw /apis/metrics.k8s.io/v1beta1/nodes
+```
+
+Kubeadm's default kubelet serving certificates are self-signed, so the
+Metrics Server connection to kubelets defaults to
+`metrics_server_kubelet_insecure_tls: true`. This is limited to the trusted
+cluster network and can be disabled after introducing an audited kubelet
+serving-certificate signing and approval workflow.
 
 ## Version policy
 
@@ -236,6 +269,62 @@ Pod restarts and drift from the catalogued Kubernetes version.
 Run the baseline several times under comparable idle conditions before treating
 a difference as a regression. Later load-generating CPU, network and storage
 profiles must remain explicit opt-ins with bounded writes and automatic cleanup.
+
+Run the complementary active-safe control benchmark explicitly:
+
+```bash
+./cluster-control.sh --benchmark
+```
+
+It measures persistent API latency, Pod startup, DNS and Pod-to-Pod throughput
+inside a temporary restricted namespace. Sample counts, CPU/memory and network
+traffic are bounded, no storage load is generated, and cleanup runs even after
+an error. Results are written below
+`config/.kube/outputs/benchmarks-active/YYYYMMDDTHHMMSSZ/`.
+
+Name an A/B experiment without changing the safety limits:
+
+```bash
+./cluster-control.sh --benchmark \
+  -- -e performance_benchmark_experiment=schedutil
+```
+
+Apply one experiment at a time, then rerun the benchmark:
+
+```bash
+./cluster-control.sh --performance-profile \
+  -- -e performance_tuning_profile=schedutil
+./cluster-control.sh --benchmark \
+  -- -e performance_benchmark_experiment=schedutil
+```
+
+The supported profiles are `schedutil` and `parallel-pulls`. Application is
+serial and waits for every node to return `Ready`. Restore both defaults with:
+
+```bash
+./cluster-control.sh --performance-profile \
+  -- -e performance_tuning_profile=control
+```
+
+Treat `parallel-pulls` as an experimental capability, not a recommended default.
+The active-safe benchmark deliberately reuses cached images and does not write a
+cold image set to flash, so it cannot prove a benefit from concurrent pulls.
+
+NodeLocal DNS is separate because it changes the DNS data path. Its default is
+read-only `audit`; enabling and rollback both require an explicit state:
+
+```bash
+./cluster-control.sh --node-local-dns
+./cluster-control.sh --node-local-dns -- -e node_local_dns_state=enabled
+./cluster-control.sh --benchmark \
+  -- -e performance_benchmark_experiment=node-local-dns
+./cluster-control.sh --node-local-dns -- -e node_local_dns_state=absent
+```
+
+The role supports only the documented kube-proxy `iptables` path, uses a pinned
+multi-architecture image with ARM64 support, waits for one cache Pod per node,
+verifies cluster DNS after both enable and rollback, and automatically removes
+the cache resources when enablement verification fails.
 
 ## Raspberry Pi policy
 

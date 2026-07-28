@@ -52,6 +52,9 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn('dirname -- "${BASH_SOURCE[0]}"', wrapper)
         self.assertIn("--validate", wrapper)
         self.assertIn("--baseline", wrapper)
+        self.assertIn("--benchmark", wrapper)
+        self.assertIn("--performance-profile", wrapper)
+        self.assertIn("--node-local-dns", wrapper)
         self.assertIn("--reconcile-node-hygiene", wrapper)
         self.assertIn("--help", wrapper)
         self.assertNotIn('--name "${SCRIPT_NAME}"', wrapper)
@@ -67,6 +70,121 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn("{{ kubernetes_outputs }}/benchmarks", group_vars)
         self.assertIn("performance_baseline_profile == 'observe'", playbook)
         self.assertNotIn("kubernetes.core.k8s:", playbook)
+
+    def test_active_benchmark_is_explicit_bounded_and_always_cleans_up(self):
+        tool = (REPO_ROOT / "workdir" / "tools" / "cluster_benchmark.py").read_text()
+        playbook = (
+            REPO_ROOT / "workdir" / "playbooks" / "27-run-performance-benchmark.yml"
+        ).read_text()
+
+        self.assertIn("performance_benchmark_profile == 'active-safe'", playbook)
+        self.assertIn("finally:", tool)
+        self.assertIn('"delete",\n                "namespace"', tool)
+        self.assertIn("Benchmark namespace cleanup failed", tool)
+        self.assertIn("bounded_integer(1, 64)", tool)
+        self.assertIn("node-role.kubernetes.io/control-plane", tool)
+        self.assertIn("compare_with_control", tool)
+        self.assertNotIn("/dev/sd", tool)
+
+    def test_performance_profiles_are_serial_and_have_control_rollback(self):
+        playbook = (
+            REPO_ROOT / "workdir" / "playbooks" / "28-apply-performance-profile.yml"
+        ).read_text()
+        role = (
+            REPO_ROOT / "workdir" / "roles" / "performance_tuning" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertIn("serial: 1", playbook)
+        self.assertIn("any_errors_fatal: true", playbook)
+        self.assertIn("'control'", role)
+        self.assertIn("performance_tuning_profile == 'control'", role)
+        self.assertIn("--check", role)
+
+    def test_node_local_dns_defaults_to_audit_and_pins_multiarch_image(self):
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
+        tasks = (
+            REPO_ROOT / "workdir" / "roles" / "node_local_dns" / "tasks" / "main.yml"
+        ).read_text()
+        playbook = (
+            REPO_ROOT / "workdir" / "playbooks" / "29-manage-node-local-dns.yml"
+        ).read_text()
+
+        self.assertIn("node_local_dns_state: audit", group_vars)
+        self.assertRegex(
+            group_vars,
+            r"k8s-dns-node-cache:1[.]26[.]8@sha256:[a-f0-9]{64}",
+        )
+        self.assertIn("node_local_dns_kube_proxy_mode == 'iptables'", tasks)
+        self.assertIn("node_local_dns_state == 'absent'", tasks)
+        self.assertIn("Verify DNS resolution after state transition", tasks)
+        self.assertIn("rescue:", playbook)
+        self.assertIn("node_local_dns_state: absent", playbook)
+
+    def test_prometheus_verifies_optional_node_local_dns_metrics(self):
+        tasks = (REPO_ROOT / "workdir" / "roles" / "prometheus" / "tasks" / "main.yml").read_text()
+
+        self.assertIn("Detect optional NodeLocal DNS deployment", tasks)
+        self.assertIn('up{job="node-local-dns"}', tasks)
+        self.assertIn("prometheus_node_local_dns.resources | length > 0", tasks)
+
+    def test_prometheus_normalizes_and_verifies_lens_helm_labels(self):
+        config = (
+            REPO_ROOT
+            / "workdir"
+            / "roles"
+            / "prometheus"
+            / "templates"
+            / "prometheus-configmap.yml.j2"
+        ).read_text()
+        tasks = (
+            REPO_ROOT / "workdir" / "roles" / "observability_verify" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertIn("target_label: node", config)
+        self.assertIn("target_label: kubernetes_node", config)
+        self.assertIn("target_label: instance", config)
+        self.assertIn("Verify Prometheus labels required by Lens Helm queries", tasks)
+        self.assertIn("always:", tasks)
+        self.assertIn('node_cpu_seconds_total{node=~".+"}', tasks)
+        self.assertIn('container_cpu_usage_seconds_total{instance=~".+",pod=~".+"}', tasks)
+
+    def test_metrics_server_is_pinned_hardened_and_runtime_verified(self):
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
+        manifest = (
+            REPO_ROOT
+            / "workdir"
+            / "roles"
+            / "metrics_server"
+            / "templates"
+            / "metrics-server.yml.j2"
+        ).read_text()
+        tasks = (
+            REPO_ROOT / "workdir" / "roles" / "metrics_server" / "tasks" / "main.yml"
+        ).read_text()
+        monitoring = (REPO_ROOT / "workdir" / "playbooks" / "13-setup-monitoring.yml").read_text()
+        upgrades = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_upgrade_addons" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertRegex(
+            group_vars,
+            r"metrics-server:v0[.]9[.]0@sha256:[a-f0-9]{64}",
+        )
+        self.assertRegex(
+            group_vars,
+            r"metrics-server:v0[.]8[.]1@sha256:[a-f0-9]{64}",
+        )
+        self.assertIn("readOnlyRootFilesystem: true", manifest)
+        self.assertIn("allowPrivilegeEscalation: false", manifest)
+        self.assertIn("medium: Memory", manifest)
+        self.assertIn("metrics_server_kubelet_insecure_tls", manifest)
+        self.assertIn("startupProbe:", manifest)
+        self.assertIn("timeoutSeconds: {{ metrics_server_probe_timeout_seconds }}", manifest)
+        self.assertIn("Wait until the Kubernetes Metrics API is available", tasks)
+        self.assertIn("kubectl", tasks)
+        self.assertIn("top", tasks)
+        self.assertIn("- metrics_server", monitoring)
+        self.assertIn("Reconcile installed Metrics Server", upgrades)
 
     def test_hygiene_reconciler_only_includes_bounded_task_files(self):
         playbook = (

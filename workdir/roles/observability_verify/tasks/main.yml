@@ -1,0 +1,89 @@
+---
+- name: Ensure previous observability verification pod is absent
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Pod
+    name: "{{ observability_verify_smoke_pod }}"
+    namespace: "{{ monitoring_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+
+- name: Verify Prometheus query compatibility
+  block:
+    - name: Create observability verification pod
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "{{ observability_verify_smoke_pod }}"
+            namespace: "{{ monitoring_namespace }}"
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: smoke
+                image: "{{ platform_smoke_test_image }}"
+                command: ["sh", "-c", "sleep 300"]
+        kubeconfig: "{{ kubeconfig_local_path }}"
+
+    - name: Wait until the observability verification pod is ready
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        name: "{{ observability_verify_smoke_pod }}"
+        namespace: "{{ monitoring_namespace }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      register: observability_verify_pod
+      retries: 12
+      delay: 5
+      until:
+        - observability_verify_pod.resources | length == 1
+        - observability_verify_pod.resources[0].status.phase == "Running"
+        - observability_verify_pod.resources[0].status.containerStatuses is defined
+        - >-
+          observability_verify_pod.resources[0].status.containerStatuses
+          | selectattr('ready', 'equalto', true)
+          | list
+          | length
+          == 1
+      changed_when: false
+
+    - name: Verify Prometheus labels required by Lens Helm queries
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - exec
+          - -n
+          - "{{ monitoring_namespace }}"
+          - "{{ observability_verify_smoke_pod }}"
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+          - --
+          - wget
+          - -qO-
+          - >-
+            http://prometheus.{{ monitoring_namespace }}.svc.cluster.local:9090/api/v1/query?query={{
+              item | urlencode
+            }}
+      loop:
+        - 'node_cpu_seconds_total{node=~".+"}'
+        - 'node_memory_MemTotal_bytes{node=~".+"}'
+        - 'container_cpu_usage_seconds_total{instance=~".+",pod=~".+"}'
+        - 'container_memory_working_set_bytes{instance=~".+",pod=~".+"}'
+        - 'kube_node_status_allocatable{node=~".+",resource="cpu"}'
+        - 'kube_pod_container_resource_requests{node=~".+",resource="memory"}'
+      register: observability_verify_lens_queries
+      changed_when: false
+      failed_when: >-
+        '"status":"success"' not in observability_verify_lens_queries.stdout
+        or '"result":[]' in observability_verify_lens_queries.stdout
+  always:
+    - name: Remove observability verification pod
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "{{ observability_verify_smoke_pod }}"
+        namespace: "{{ monitoring_namespace }}"
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      failed_when: false

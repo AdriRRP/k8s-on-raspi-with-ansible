@@ -42,6 +42,16 @@
   delegate_to: localhost
   when: monitoring_namespace in upgrade_detected_namespace_names
 
+- name: Query Metrics Server deployment
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: kube-system
+    name: metrics-server
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: upgrade_metrics_server_deployment
+  delegate_to: localhost
+
 - name: Query NFS provisioner deployment
   kubernetes.core.k8s_info:
     api_version: apps/v1
@@ -85,6 +95,8 @@
     upgrade_has_metallb: "{{ (upgrade_metallb_controller.resources | default([])) | length > 0 }}"
     upgrade_has_nfs_provisioner: "{{ (upgrade_nfs_provisioner_deployment.resources | default([])) | length > 0 }}"
     upgrade_has_registry: "{{ (upgrade_registry_deployment.resources | default([])) | length > 0 }}"
+    upgrade_has_metrics_server: >-
+      {{ (upgrade_metrics_server_deployment.resources | default([])) | length > 0 }}
     upgrade_has_prometheus: >-
       {{
         (upgrade_monitoring_deployments.resources | default([]))
@@ -149,6 +161,7 @@
       prometheus: "{{ upgrade_has_prometheus }}"
       node_exporter: "{{ upgrade_has_node_exporter }}"
       kube_state_metrics: "{{ upgrade_has_kube_state_metrics }}"
+      metrics_server: "{{ upgrade_has_metrics_server }}"
       grafana: "{{ upgrade_has_grafana }}"
       prometheus_node: "{{ upgrade_prometheus_existing_node_name }}"
       grafana_node: "{{ upgrade_grafana_existing_node_name }}"
@@ -199,6 +212,7 @@
     upgrade_has_prometheus | bool
     or upgrade_has_node_exporter | bool
     or upgrade_has_kube_state_metrics | bool
+    or upgrade_has_metrics_server | bool
     or upgrade_has_grafana | bool
 
 - name: Reconcile installed Prometheus
@@ -218,6 +232,11 @@
     name: kube_state_metrics
   when: upgrade_has_kube_state_metrics | bool
 
+- name: Reconcile installed Metrics Server
+  ansible.builtin.include_role:
+    name: metrics_server
+  when: upgrade_has_metrics_server | bool
+
 - name: Reconcile installed Grafana
   ansible.builtin.include_role:
     name: grafana
@@ -225,3 +244,11 @@
     grafana_runtime_node_name: "{{ upgrade_grafana_existing_node_name }}"
     grafana_auto_reset_persistent_state_on_provisioning_failure: "{{ upgrade_grafana_auto_reset_persistent_state_on_provisioning_failure }}"
   when: upgrade_has_grafana | bool
+
+- name: Verify reconciled observability query compatibility
+  ansible.builtin.include_role:
+    name: observability_verify
+  when:
+    - upgrade_has_prometheus | bool
+    - upgrade_has_node_exporter | bool
+    - upgrade_has_kube_state_metrics | bool

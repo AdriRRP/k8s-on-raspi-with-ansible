@@ -1,0 +1,3 @@
+---
+monitoring_namespace: monitoring
+observability_verify_smoke_pod: observability-verify

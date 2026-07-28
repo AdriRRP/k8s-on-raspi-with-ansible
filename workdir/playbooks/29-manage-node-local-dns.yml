@@ -1,0 +1,32 @@
+---
+- name: Audit, enable or roll back NodeLocal DNS
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Preserve requested NodeLocal DNS state
+      ansible.builtin.set_fact:
+        node_local_dns_requested_state: "{{ node_local_dns_state }}"
+
+    - name: Run NodeLocal DNS preflight
+      ansible.builtin.include_role:
+        name: cluster_preflight
+
+    - name: Apply and verify requested NodeLocal DNS state
+      block:
+        - name: Manage NodeLocal DNS
+          ansible.builtin.include_role:
+            name: node_local_dns
+      rescue:
+        - name: Roll back a failed NodeLocal DNS enablement
+          ansible.builtin.include_role:
+            name: node_local_dns
+          vars:
+            node_local_dns_state: absent
+          when: node_local_dns_requested_state == 'enabled'
+
+        - name: Report failed NodeLocal DNS transition
+          ansible.builtin.fail:
+            msg: >-
+              NodeLocal DNS transition to {{ node_local_dns_requested_state }}
+              failed. Automatic rollback was attempted for enablement failures.

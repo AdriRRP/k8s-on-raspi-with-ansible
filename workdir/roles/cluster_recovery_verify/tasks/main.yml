@@ -130,6 +130,34 @@
     - cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
     - cluster_recovery_verify_node_exporter.resources | default([]) | length > 0
 
+- name: Gather Kubernetes Metrics API status
+  kubernetes.core.k8s_info:
+    api_version: apiregistration.k8s.io/v1
+    kind: APIService
+    name: v1beta1.metrics.k8s.io
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: cluster_recovery_verify_metrics_api
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Verify native node metrics after recovery when installed
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - top
+      - nodes
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+  register: cluster_recovery_verify_top_nodes
+  changed_when: false
+  retries: 12
+  delay: 5
+  until:
+    - cluster_recovery_verify_top_nodes.rc == 0
+    - cluster_recovery_verify_top_nodes.stdout_lines | length > 1
+  delegate_to: localhost
+  when: cluster_recovery_verify_metrics_api.resources | default([]) | length > 0
+
 - name: Verify observability endpoints when monitoring namespace exists
   when: cluster_recovery_verify_monitoring_namespace in cluster_recovery_verify_namespace_names
   block:

@@ -61,10 +61,25 @@ platform_release_catalog:
     calico_custom_resources_checksum: "4fb598a7fce1ad1f8bbfb9004f5efcdb835082e92e06323cb7b8ce60260ed891"
     metallb_version: "v0.16.1"
     metallb_manifest_checksum: "bf25feebb7582ca7df845efd52ffbc2960d6cbf4cfc972f47fded9f788b67f0b"
+    node_local_dns_image: >-
+      registry.k8s.io/dns/k8s-dns-node-cache:1.26.8@sha256:bc6e64e2c85956af2fcc0aa720086410d41b4f31f378c9a92646fecc85cd4739
   observability:
     prometheus_image: "prom/prometheus:v3.12.0"
     grafana_image: "grafana/grafana:13.0.1-security-01"
     node_exporter_image: "quay.io/prometheus/node-exporter:v1.11.1"
+    metrics_server_images:
+      "1.31": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.8.1@sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41
+      "1.32": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.8.1@sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41
+      "1.33": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.8.1@sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41
+      "1.34": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
+      "1.35": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
+      "1.36": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
     kube_state_metrics_images:
       "1.31": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1"
       "1.32": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.16.0"
@@ -104,6 +119,10 @@ monitoring_service_type: ClusterIP
 
 prometheus_service_type: "{{ monitoring_service_type }}"
 grafana_service_type: "{{ monitoring_service_type }}"
+
+# kubeadm uses self-signed kubelet serving certificates unless a separate
+# serving-certificate approval workflow is configured.
+metrics_server_kubelet_insecure_tls: true
 
 grafana_admin_user: admin
 grafana_admin_password_file: "{{ kubernetes_outputs }}/grafana-admin-password"
@@ -145,6 +164,30 @@ performance_baseline_run_id: ""
 performance_baseline_api_samples: 15
 performance_baseline_command_timeout_seconds: 15
 performance_baseline_repository_revision: unknown
+
+# Active load generation is available only through the explicit benchmark
+# entrypoint. Limits are deliberately small for four Raspberry Pi nodes.
+performance_benchmark_profile: active-safe
+performance_benchmark_experiment: control
+performance_benchmark_output_root: "{{ kubernetes_outputs }}/benchmarks-active"
+performance_benchmark_api_samples: 50
+performance_benchmark_pod_startup_samples: 8
+performance_benchmark_dns_queries_per_node: 20
+performance_benchmark_network_transfer_mib_per_node: 8
+
+# Only one tuning experiment is applied at a time. `control` is the rollback.
+performance_tuning_profile: control
+performance_tuning_cpu_governor_control: ondemand
+performance_tuning_cpu_governor_experiment: schedutil
+performance_tuning_parallel_image_pulls: 2
+
+node_local_dns_state: audit
+node_local_dns_address: 169.254.20.10
+node_local_dns_domain: cluster.local
+node_local_dns_image: "{{ platform_release_catalog.networking.node_local_dns_image }}"
+node_local_dns_cache_success_entries: 4096
+node_local_dns_cache_denial_entries: 1024
+node_local_dns_max_concurrent_queries: 100
 
 recovery_seed_bootstrap_user: "{{ ansible_user | default('ubuntu') }}"
 recovery_seed_cloud_init_package_update: false

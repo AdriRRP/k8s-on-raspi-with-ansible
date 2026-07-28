@@ -13,4 +13,6 @@
     - prometheus
     - node_exporter
     - kube_state_metrics
+    - metrics_server
     - grafana
+    - observability_verify

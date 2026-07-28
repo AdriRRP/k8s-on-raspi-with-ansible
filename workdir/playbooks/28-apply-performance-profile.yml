@@ -1,0 +1,46 @@
+---
+- name: Require a healthy cluster before performance tuning
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Validate requested tuning profile
+      ansible.builtin.assert:
+        that:
+          - performance_tuning_profile in ['control', 'schedutil', 'parallel-pulls']
+        fail_msg: "Use performance_tuning_profile=control, schedutil or parallel-pulls."
+
+    - name: Require every node to be Ready before tuning
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+          - wait
+          - --for=condition=Ready
+          - nodes
+          - --all
+          - --timeout=60s
+      changed_when: false
+
+- name: Apply one reversible performance profile at a time
+  hosts: cluster
+  gather_facts: true
+  serial: 1
+  any_errors_fatal: true
+
+  roles:
+    - role: performance_tuning
+
+  post_tasks:
+    - name: Wait for the tuned node to remain Ready
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+          - wait
+          - --for=condition=Ready
+          - "node/{{ inventory_hostname }}"
+          - --timeout=90s
+      changed_when: false
+      delegate_to: localhost
+      become: false

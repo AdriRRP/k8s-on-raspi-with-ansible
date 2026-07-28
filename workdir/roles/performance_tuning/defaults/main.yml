@@ -1,0 +1,5 @@
+---
+performance_tuning_profile: control
+performance_tuning_cpu_governor_control: ondemand
+performance_tuning_cpu_governor_experiment: schedutil
+performance_tuning_parallel_image_pulls: 2

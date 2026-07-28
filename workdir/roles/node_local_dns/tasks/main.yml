@@ -1,0 +1,251 @@
+---
+- name: Validate NodeLocal DNS operation
+  ansible.builtin.assert:
+    that:
+      - node_local_dns_state in ['audit', 'enabled', 'absent']
+      - node_local_dns_address is match('^169[.]254[.][0-9]{1,3}[.][0-9]{1,3}$')
+      - node_local_dns_cache_success_entries | int >= 1024
+      - node_local_dns_cache_success_entries | int <= 10000
+      - node_local_dns_cache_denial_entries | int >= 1024
+      - node_local_dns_cache_denial_entries | int <= 10000
+      - node_local_dns_max_concurrent_queries | int >= 10
+      - node_local_dns_max_concurrent_queries | int <= 1000
+    fail_msg: "Invalid NodeLocal DNS state, link-local address or cache bound."
+
+- name: Read kube-proxy configuration before enabling NodeLocal DNS
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    namespace: kube-system
+    name: kube-proxy
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: node_local_dns_kube_proxy
+  when: node_local_dns_state == 'enabled'
+
+- name: Require kube-proxy configuration to exist
+  ansible.builtin.assert:
+    that:
+      - node_local_dns_kube_proxy.resources | length == 1
+      - "'config.conf' in node_local_dns_kube_proxy.resources[0].data"
+    fail_msg: "kube-proxy configuration could not be inspected; nothing was changed."
+  when: node_local_dns_state == 'enabled'
+
+- name: Resolve effective kube-proxy mode
+  ansible.builtin.set_fact:
+    node_local_dns_kube_proxy_mode: >-
+      {{
+        (
+          node_local_dns_kube_proxy.resources[0].data['config.conf']
+          | from_yaml
+        ).mode
+        | default('iptables', true)
+        | lower
+      }}
+  when: node_local_dns_state == 'enabled'
+
+- name: Require the documented iptables integration path
+  ansible.builtin.assert:
+    that:
+      - node_local_dns_kube_proxy_mode == 'iptables'
+      - kube_proxy_mode | lower == 'iptables'
+    fail_msg: >-
+      NodeLocal DNS automation currently supports only kube-proxy iptables mode.
+      No resources have been changed.
+  when: node_local_dns_state == 'enabled'
+
+- name: Read kube-dns service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: kube-system
+    name: kube-dns
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: node_local_dns_kube_dns
+
+- name: Require a single IPv4 kube-dns service
+  ansible.builtin.assert:
+    that:
+      - node_local_dns_kube_dns.resources | length == 1
+      - node_local_dns_kube_dns.resources[0].spec.clusterIP is match('^[0-9.]+$')
+      - node_local_dns_kube_dns.resources[0].spec.clusterIP != node_local_dns_address
+    fail_msg: "A distinct IPv4 kube-dns ClusterIP is required."
+
+- name: Resolve kube-dns service address
+  ansible.builtin.set_fact:
+    node_local_dns_service_ip: "{{ node_local_dns_kube_dns.resources[0].spec.clusterIP }}"
+
+- name: Apply pinned NodeLocal DNS resources
+  kubernetes.core.k8s:
+    state: present
+    definition: >-
+      {{
+        lookup('template', 'node-local-dns.yml.j2')
+        | from_yaml_all
+        | list
+      }}
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  when: node_local_dns_state == 'enabled'
+
+- name: Wait for NodeLocal DNS on every node
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: kube-system
+    name: node-local-dns
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: node_local_dns_daemonset
+  retries: 30
+  delay: 5
+  until:
+    - node_local_dns_daemonset.resources | length == 1
+    - >-
+      node_local_dns_daemonset.resources[0].status.numberReady | default(0) | int
+      == node_local_dns_daemonset.resources[0].status.desiredNumberScheduled | default(0) | int
+    - node_local_dns_daemonset.resources[0].status.desiredNumberScheduled | default(0) | int > 0
+  when: node_local_dns_state == 'enabled'
+
+- name: Remove NodeLocal DNS DaemonSet first during rollback
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: kube-system
+    name: node-local-dns
+    wait: true
+    wait_timeout: 120
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  when: node_local_dns_state == 'absent'
+
+- name: Remove remaining NodeLocal DNS resources during rollback
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: "{{ item.kind }}"
+    namespace: kube-system
+    name: "{{ item.name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  loop:
+    - kind: Service
+      name: node-local-dns
+    - kind: ConfigMap
+      name: node-local-dns
+    - kind: Service
+      name: kube-dns-upstream
+    - kind: ServiceAccount
+      name: node-local-dns
+  when: node_local_dns_state == 'absent'
+
+- name: Read NodeLocal DNS state
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: DaemonSet
+    namespace: kube-system
+    name: node-local-dns
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: node_local_dns_audit
+
+- name: Report NodeLocal DNS state
+  ansible.builtin.debug:
+    msg: >-
+      NodeLocal DNS is {{
+        'absent'
+        if node_local_dns_audit.resources | length == 0
+        else (
+          node_local_dns_audit.resources[0].status.numberReady | default(0) | string
+          ~ '/'
+          ~ node_local_dns_audit.resources[0].status.desiredNumberScheduled | default(0) | string
+          ~ ' Ready'
+        )
+      }}.
+
+- name: Verify DNS resolution after state transition
+  when: node_local_dns_state != 'audit'
+  block:
+    - name: Remove stale DNS transition probe
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        namespace: default
+        name: node-local-dns-transition-probe
+        kubeconfig: "{{ kubeconfig_local_path }}"
+
+    - name: Create DNS transition probe
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: node-local-dns-transition-probe
+            namespace: default
+          spec:
+            automountServiceAccountToken: false
+            restartPolicy: Never
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 65534
+              runAsGroup: 65534
+              seccompProfile:
+                type: RuntimeDefault
+            containers:
+              - name: probe
+                image: "{{ platform_smoke_test_image }}"
+                command: ["sh", "-c", "sleep 300"]
+                resources:
+                  requests:
+                    cpu: 5m
+                    memory: 8Mi
+                  limits:
+                    cpu: 100m
+                    memory: 32Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop:
+                      - ALL
+        kubeconfig: "{{ kubeconfig_local_path }}"
+
+    - name: Wait for DNS transition probe
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: default
+        name: node-local-dns-transition-probe
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      register: node_local_dns_probe
+      retries: 20
+      delay: 3
+      until:
+        - node_local_dns_probe.resources | length == 1
+        - node_local_dns_probe.resources[0].status.phase == 'Running'
+        - >-
+          node_local_dns_probe.resources[0].status.containerStatuses
+          | default([])
+          | selectattr('ready', 'equalto', true)
+          | list
+          | length == 1
+
+    - name: Resolve Kubernetes service through cluster DNS
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - "--kubeconfig={{ kubeconfig_local_path }}"
+          - exec
+          - --namespace=default
+          - node-local-dns-transition-probe
+          - --
+          - nslookup
+          - kubernetes.default.svc.cluster.local
+      changed_when: false
+  always:
+    - name: Remove DNS transition probe
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        namespace: default
+        name: node-local-dns-transition-probe
+        kubeconfig: "{{ kubeconfig_local_path }}"
+      failed_when: false

@@ -1,0 +1,9 @@
+---
+node_local_dns_state: audit
+node_local_dns_address: 169.254.20.10
+node_local_dns_domain: cluster.local
+node_local_dns_image: >-
+  registry.k8s.io/dns/k8s-dns-node-cache:1.26.8@sha256:bc6e64e2c85956af2fcc0aa720086410d41b4f31f378c9a92646fecc85cd4739
+node_local_dns_cache_success_entries: 4096
+node_local_dns_cache_denial_entries: 1024
+node_local_dns_max_concurrent_queries: 100
