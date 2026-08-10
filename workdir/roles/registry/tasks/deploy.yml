@@ -75,9 +75,50 @@
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
+- name: Query existing registry service before TLS migration
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    name: "{{ registry_name }}"
+    namespace: "{{ registry_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: registry_existing_service
+  delegate_to: localhost
+
+- name: Remove obsolete plaintext registry service port
+  kubernetes.core.k8s_json_patch:
+    api_version: v1
+    kind: Service
+    name: "{{ registry_name }}"
+    namespace: "{{ registry_namespace }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+    patch:
+      - op: test
+        path: "/spec/ports/{{ registry_service_port_index }}/name"
+        value: http
+      - op: remove
+        path: "/spec/ports/{{ registry_service_port_index }}"
+  loop: >-
+    {{
+      registry_existing_service.resources[0].spec.ports
+      if registry_existing_service.resources | length > 0
+      else []
+    }}
+  loop_control:
+    index_var: registry_service_port_index
+    label: "{{ item.name | default('unnamed') }}"
+  when:
+    - registry_tls_enabled | bool
+    - item.name | default('') == 'http'
+  delegate_to: localhost
+
 - name: Create registry service
   kubernetes.core.k8s:
     state: present
+    apply: true
+    server_side_apply:
+      field_manager: ansible-registry
+      force_conflicts: true
     definition: "{{ lookup('template', 'registry-service.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost

@@ -413,6 +413,10 @@ class ProjectPolicyTests(unittest.TestCase):
             (registry_root / "tasks" / "external-verify.yml").read_text(),
         )
         self.assertIn("registry_external_port", service)
+        deploy_tasks = (registry_root / "tasks" / "deploy.yml").read_text()
+        self.assertIn("apply: true", deploy_tasks)
+        self.assertIn("kubernetes.core.k8s_json_patch", deploy_tasks)
+        self.assertIn("Remove obsolete plaintext registry service port", deploy_tasks)
         self.assertIn(
             "/etc/containerd/certs.d",
             (
