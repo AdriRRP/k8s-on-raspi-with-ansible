@@ -1,0 +1,97 @@
+---
+- name: Query persistent volumes
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolume
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: storage_hygiene_pvs
+
+- name: Select explicitly retired NFS volumes
+  ansible.builtin.set_fact:
+    storage_hygiene_candidates: >-
+      {{
+        storage_hygiene_candidates | default([])
+        + [item]
+      }}
+  loop: "{{ storage_hygiene_pvs.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  vars:
+    storage_hygiene_claim: >-
+      {{ item.spec.claimRef.namespace | default('') }}/{{ item.spec.claimRef.name | default('') }}
+  when:
+    - item.status.phase | default('') == 'Released'
+    - item.spec.storageClassName | default('') == storage_hygiene_storage_class
+    - item.metadata.annotations['pv.kubernetes.io/provisioned-by'] | default('') == storage_hygiene_provisioner
+    - storage_hygiene_claim in storage_hygiene_retired_claims
+
+- name: Validate every retired NFS path before mutation
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.spec.nfs.path is defined
+      - (item.spec.nfs.path | regex_search('^' ~ storage_hygiene_nfs_root ~ '/[a-z0-9-]+-pvc-[a-f0-9-]+$')) is not none
+      - item.status.phase == 'Released'
+    fail_msg: "Refusing unsafe retired volume path for {{ item.metadata.name }}."
+  loop: "{{ storage_hygiene_candidates | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }} -> {{ item.spec.nfs.path | default('missing') }}"
+
+- name: Create storage hygiene report directory
+  ansible.builtin.file:
+    path: "{{ storage_hygiene_report_dir }}"
+    state: directory
+    mode: '0700'
+
+- name: Archive retired PV metadata before any cleanup
+  ansible.builtin.copy:
+    dest: "{{ storage_hygiene_report_dir }}/released-pvs.json"
+    mode: '0600'
+    content: "{{ storage_hygiene_candidates | default([]) | to_nice_json }}\n"
+  when: storage_hygiene_candidates | default([]) | length > 0
+
+- name: Report storage hygiene decision
+  ansible.builtin.debug:
+    msg: >-
+      Found {{ storage_hygiene_candidates | default([]) | length }} allowlisted Released PVs;
+      cleanup={{ storage_hygiene_apply | bool }}.
+      {{ 'Metadata is archived at ' ~ storage_hygiene_report_dir ~ '/released-pvs.json.'
+         if storage_hygiene_candidates | default([]) | length > 0
+         else 'The previous non-empty forensic report was preserved.' }}
+
+- name: Remove retired NFS directories
+  ansible.builtin.file:
+    path: "{{ item.spec.nfs.path }}"
+    state: absent
+  loop: "{{ storage_hygiene_candidates | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }} -> {{ item.spec.nfs.path }}"
+  delegate_to: "{{ groups['master'] | first }}"
+  become: true
+  when: storage_hygiene_apply | bool
+
+- name: Remove retired PersistentVolume objects
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: PersistentVolume
+    name: "{{ item.metadata.name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  loop: "{{ storage_hygiene_candidates | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  when: storage_hygiene_apply | bool
+
+- name: Verify no allowlisted retired PV remains
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolume
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: storage_hygiene_pvs_after
+  failed_when: >-
+    storage_hygiene_apply | bool
+    and (
+      storage_hygiene_pvs_after.resources
+      | selectattr('metadata.name', 'in', storage_hygiene_candidates | default([]) | map(attribute='metadata.name') | list)
+      | list | length
+    ) > 0

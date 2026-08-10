@@ -6,6 +6,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -53,3 +55,15 @@ jobs:
           -w /src
           ansible-k8s-raspberry-audit:ci
           ./tools/validate.sh
+
+      - name: Audit stable upstream releases
+        if: github.event_name == 'schedule'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          docker run --rm
+          --security-opt no-new-privileges
+          --env GITHUB_TOKEN
+          -v "$PWD/workdir:/home/ansible/workdir:ro"
+          ansible-k8s-raspberry-audit:ci
+          python3 tools/release_catalog_audit.py

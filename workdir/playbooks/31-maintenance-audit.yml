@@ -1,0 +1,10 @@
+---
+- name: Audit residual maintenance on every cluster node
+  hosts: cluster
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  roles:
+    - maintenance_audit

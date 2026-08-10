@@ -1,4 +1,21 @@
 ---
+- name: Require TLS and identity for external registry traffic
+  ansible.builtin.assert:
+    that:
+      - >-
+        registry_service_type == 'ClusterIP'
+        or (registry_tls_enabled | bool and registry_admin_username | length > 0)
+        or registry_allow_insecure_external_exposure | bool
+    fail_msg: >-
+      External registry exposure requires TLS and an authenticated identity.
+
+- name: Prepare registry PKI and identities
+  ansible.builtin.import_tasks: pki.yml
+  when: registry_tls_enabled | bool
+
+- name: Inspect legacy registry installations before migration
+  ansible.builtin.import_tasks: legacy.yml
+
 - name: Include registry deployment tasks
   ansible.builtin.import_tasks: deploy.yml
 
@@ -10,3 +27,6 @@
   when:
     - registry_service_type == "LoadBalancer"
     - registry_lb_ip | length > 0
+
+- name: Remove empty legacy registry after Zot verification
+  ansible.builtin.import_tasks: cleanup-legacy.yml

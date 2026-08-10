@@ -71,3 +71,14 @@
           }}
           before running with upgrade_execution_mode=apply.
       when: upgrade_execution_mode == 'dry-run'
+
+- name: Reject residual node maintenance after an applied upgrade
+  hosts: cluster
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  roles:
+    - role: maintenance_audit
+      when: upgrade_execution_mode == 'apply'

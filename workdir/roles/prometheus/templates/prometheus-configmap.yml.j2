@@ -33,6 +33,24 @@ data:
             action: keep
             regex: kube-state-metrics;monitoring;http-metrics
 
+      - job_name: 'zot-registry'
+        metrics_path: /metrics
+{% if registry_tls_enabled | bool %}
+        scheme: https
+        basic_auth:
+          username: {{ registry_metrics_username }}
+          password_file: /etc/prometheus/zot-auth/password
+        tls_config:
+          ca_file: /etc/prometheus/zot-auth/ca.crt
+          server_name: {{ registry_name }}.{{ registry_namespace }}.svc.cluster.local
+{% endif %}
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: registry;{{ 'https' if registry_tls_enabled | bool else 'http' }}
+
       - job_name: 'kubernetes-apiservers'
         scheme: https
         authorization:

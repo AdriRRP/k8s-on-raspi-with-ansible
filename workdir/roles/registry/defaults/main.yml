@@ -8,4 +8,33 @@ registry_storage_class_name: raspi-nfs-provisioner
 registry_persistence_enabled: true
 registry_pvc_size: 20Gi
 registry_lb_ip: ""
+registry_external_port: 443
+registry_tls_enabled: true
+registry_hostname: registry.home.arpa
+registry_cluster_dns_name: "{{ registry_name }}.{{ registry_namespace }}.svc.cluster.local"
+registry_admin_username: registry-admin
+registry_metrics_username: prometheus
+registry_pki_dir: "{{ kubernetes_outputs }}/registry-pki"
+registry_ca_key_path: "{{ registry_pki_dir }}/ca.key"
+registry_ca_cert_path: "{{ registry_pki_dir }}/ca.crt"
+registry_server_key_path: "{{ registry_pki_dir }}/tls.key"
+registry_server_cert_path: "{{ registry_pki_dir }}/tls.crt"
+registry_admin_password_path: "{{ registry_pki_dir }}/admin-password"
+registry_metrics_password_path: "{{ registry_pki_dir }}/metrics-password"
+registry_htpasswd_path: "{{ registry_pki_dir }}/htpasswd"
+registry_credentials_file: "{{ kubernetes_outputs }}/registry-credentials"
+registry_certificate_validity_days: 90
+registry_certificate_renewal_days: 30
+registry_auth_failure_delay_seconds: 5
+registry_gc_delay: 6h
+registry_gc_interval: 24h
+registry_scrub_interval: 168h
+registry_scheduler_workers: 1
+registry_run_as_user: 1000
+registry_run_as_group: 1000
+registry_legacy_namespaces:
+  - kube-system
+registry_migrate_legacy: true
+registry_allow_nonempty_legacy_migration: false
+registry_allow_insecure_external_exposure: false
 kubeconfig_local_path: /home/ansible/.kube/config

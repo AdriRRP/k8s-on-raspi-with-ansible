@@ -1,0 +1,101 @@
+---
+- name: Simulate pending package upgrade without taking APT locks
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - --simulate
+      - -o
+      - Debug::NoLocking=1
+      - dist-upgrade
+  register: maintenance_audit_apt_simulation
+  changed_when: false
+
+- name: Extract pending package names
+  ansible.builtin.set_fact:
+    maintenance_audit_pending_packages: >-
+      {{
+        maintenance_audit_apt_simulation.stdout_lines
+        | select('match', '^Inst ')
+        | map('regex_findall', '^Inst ([^ ]+)')
+        | flatten
+        | list
+      }}
+
+- name: Check whether a reboot is still required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: maintenance_audit_reboot_required
+
+- name: Query failed systemd units
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - --failed
+      - --no-legend
+      - --plain
+  register: maintenance_audit_failed_units_raw
+  changed_when: false
+  failed_when: false
+
+- name: Read Raspberry Pi firmware package state
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - --show
+      - --showformat=${Version}
+      - linux-firmware-raspi
+  register: maintenance_audit_firmware_version
+  changed_when: false
+  failed_when: false
+
+- name: Read current I/O pressure
+  ansible.builtin.command:
+    argv:
+      - cat
+      - /proc/pressure/io
+  register: maintenance_audit_io_pressure_raw
+  changed_when: false
+  failed_when: false
+
+- name: Resolve maintenance health signals
+  ansible.builtin.set_fact:
+    maintenance_audit_failed_units: >-
+      {{
+        maintenance_audit_failed_units_raw.stdout_lines
+        | reject('equalto', '')
+        | reject('in', maintenance_audit_ignored_failed_units)
+        | list
+      }}
+    maintenance_audit_io_pressure_avg10: >-
+      {{
+        (
+          maintenance_audit_io_pressure_raw.stdout
+          | regex_findall('(?m)^some avg10=([0-9.]+)')
+          | first
+          | default('0', true)
+        ) | float
+      }}
+
+- name: Report node maintenance state
+  ansible.builtin.debug:
+    msg:
+      pending_packages: "{{ maintenance_audit_pending_packages }}"
+      reboot_required: "{{ maintenance_audit_reboot_required.stat.exists }}"
+      failed_units: "{{ maintenance_audit_failed_units }}"
+      linux_firmware_raspi: "{{ maintenance_audit_firmware_version.stdout | default('missing', true) }}"
+      io_pressure_avg10: "{{ maintenance_audit_io_pressure_avg10 }}"
+
+- name: Enforce clean post-maintenance state
+  ansible.builtin.assert:
+    that:
+      - maintenance_audit_pending_packages | length == 0
+      - not maintenance_audit_reboot_required.stat.exists
+      - maintenance_audit_failed_units | length == 0
+      - maintenance_audit_firmware_version.rc == 0
+      - maintenance_audit_io_pressure_avg10 | float <= maintenance_audit_io_pressure_avg10_max | float
+    fail_msg: >-
+      {{ inventory_hostname }} still has residual maintenance: packages={{ maintenance_audit_pending_packages }},
+      reboot={{ maintenance_audit_reboot_required.stat.exists }}, failed_units={{ maintenance_audit_failed_units }},
+      firmware={{ maintenance_audit_firmware_version.stdout | default('missing', true) }},
+      io_avg10={{ maintenance_audit_io_pressure_avg10 }}.
+  when: maintenance_audit_enforce | bool

@@ -16,6 +16,22 @@
       name: test-pvc
   delegate_to: localhost
 
+- name: Create ephemeral StorageClass for the NFS smoke test
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: "{{ nfs_test_storage_class_name }}"
+      provisioner: "example.com/{{ storage_class_name }}"
+      reclaimPolicy: Delete
+      volumeBindingMode: Immediate
+      parameters:
+        archiveOnDelete: "false"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
 - name: Create PVC for test
   kubernetes.core.k8s:
     state: present
@@ -31,7 +47,7 @@
         resources:
           requests:
             storage: 1Mi
-        storageClassName: "{{ storage_class_name }}"
+        storageClassName: "{{ nfs_test_storage_class_name }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
@@ -115,5 +131,27 @@
     kind: PersistentVolumeClaim
     name: test-pvc
     namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait for ephemeral test volume deletion
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolume
+    name: "{{ test_pvc.resources[0].spec.volumeName }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: nfs_test_volume
+  retries: 12
+  delay: 5
+  until: nfs_test_volume.resources | length == 0
+  changed_when: false
+  delegate_to: localhost
+
+- name: Remove ephemeral NFS smoke-test StorageClass
+  kubernetes.core.k8s:
+    state: absent
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    name: "{{ nfs_test_storage_class_name }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost

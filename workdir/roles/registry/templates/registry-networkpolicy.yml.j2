@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ registry_name }}-ingress
+  namespace: {{ registry_namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ registry_name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+{% if registry_service_type == 'LoadBalancer' %}
+        - ipBlock:
+            cidr: {{ cluster_node_subnet }}
+{% endif %}
+      ports:
+        - protocol: TCP
+          port: {{ registry_port }}

@@ -12,6 +12,8 @@ storage_class_name: raspi-nfs-provisioner
 
 registry_namespace: registry
 registry_name: registry
+registry_legacy_namespaces:
+  - kube-system
 registry_service_type: ClusterIP
 registry_persistence_enabled: true
 registry_storage_class_name: raspi-nfs-provisioner

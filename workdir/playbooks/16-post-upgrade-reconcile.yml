@@ -23,3 +23,13 @@
             | default(upgrade_post_snapshot_file)
           }}
       when: upgrade_capture_snapshots | bool
+
+- name: Reject residual node maintenance after reconciliation
+  hosts: cluster
+  serial: 1
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+
+  roles:
+    - maintenance_audit

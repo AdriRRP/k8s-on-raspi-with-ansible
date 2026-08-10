@@ -1,0 +1,7 @@
+---
+- name: Audit and optionally remove retired NFS volumes
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - storage_hygiene

@@ -1,0 +1,11 @@
+---
+storage_hygiene_apply: false
+storage_hygiene_storage_class: raspi-nfs-provisioner
+storage_hygiene_provisioner: example.com/raspi-nfs-provisioner
+storage_hygiene_nfs_root: /mnt/nfs-ssd
+storage_hygiene_report_dir: "{{ kubernetes_outputs }}/storage-hygiene"
+storage_hygiene_retired_claims:
+  - default/test-pvc
+  - lens-metrics/data-prometheus-0
+  - monitoring/grafana-pvc
+  - monitoring/prometheus-pvc

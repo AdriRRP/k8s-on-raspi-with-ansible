@@ -1,0 +1,5 @@
+server = "https://{{ registry_client_endpoint }}"
+
+[host."https://{{ registry_client_endpoint }}"]
+  capabilities = ["pull", "resolve", "push"]
+  ca = "{{ registry_containerd_cert_root }}/{{ registry_client_endpoint }}/ca.crt"

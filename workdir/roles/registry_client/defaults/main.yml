@@ -1,0 +1,8 @@
+---
+registry_tls_enabled: true
+registry_hostname: registry.home.arpa
+registry_lb_ip: 192.168.0.240
+registry_external_port: 443
+registry_pki_dir: "{{ kubernetes_outputs }}/registry-pki"
+registry_ca_cert_path: "{{ registry_pki_dir }}/ca.crt"
+registry_containerd_cert_root: /etc/containerd/certs.d

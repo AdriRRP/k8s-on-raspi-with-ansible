@@ -16,6 +16,33 @@
     (registry_pods.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length) == 1
   delegate_to: localhost
 
+- name: Resolve registry verification port
+  ansible.builtin.set_fact:
+    registry_verify_port: >-
+      {{
+        registry_external_port
+        if registry_service_type == 'LoadBalancer'
+        else registry_port
+      }}
+  delegate_to: localhost
+
+- name: Verify registry PVC is bound
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: PersistentVolumeClaim
+    namespace: "{{ registry_namespace }}"
+    name: "{{ registry_name }}-pvc"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: registry_pvc
+  until:
+    - registry_pvc.resources | length == 1
+    - registry_pvc.resources[0].status.phase == 'Bound'
+  retries: 12
+  delay: 5
+  when: registry_persistence_enabled | bool
+  changed_when: false
+  delegate_to: localhost
+
 - name: Ensure previous test pod is deleted
   kubernetes.core.k8s:
     state: absent
@@ -23,8 +50,42 @@
     name: registry-tester
     namespace: default
     kubeconfig: "{{ kubeconfig_local_path }}"
+    delete_options:
+      gracePeriodSeconds: 0
   failed_when: false
   changed_when: false
+  delegate_to: localhost
+
+- name: Wait until previous registry test pod is absent
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: registry-tester
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: registry_previous_test_pod
+  retries: 12
+  delay: 2
+  until: registry_previous_test_pod.resources | length == 0
+  changed_when: false
+  delegate_to: localhost
+
+- name: Create isolated registry smoke credentials
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: registry-smoke-credentials
+        namespace: default
+      type: Opaque
+      stringData:
+        ca.crt: "{{ lookup('ansible.builtin.file', registry_ca_cert_path) }}"
+        password: "{{ registry_admin_password }}"
+        metrics-password: "{{ registry_metrics_password }}"
+  no_log: true
+  when: registry_tls_enabled | bool
   delegate_to: localhost
 
 - name: Deploy busybox pod to test access to registry
@@ -37,10 +98,36 @@
         name: registry-tester
         namespace: default
       spec:
+        automountServiceAccountToken: false
+        terminationGracePeriodSeconds: 0
         containers:
           - name: test
             image: "{{ platform_smoke_test_image }}"
             command: ["sh", "-c", "tail -f /dev/null"]
+            env:
+              - name: REGISTRY_USERNAME
+                value: "{{ registry_admin_username }}"
+              - name: REGISTRY_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: registry-smoke-credentials
+                    key: password
+              - name: REGISTRY_METRICS_USERNAME
+                value: "{{ registry_metrics_username }}"
+              - name: REGISTRY_METRICS_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: registry-smoke-credentials
+                    key: metrics-password
+            volumeMounts:
+              - name: registry-ca
+                mountPath: /etc/ssl/certs/ca-certificates.crt
+                subPath: ca.crt
+                readOnly: true
+        volumes:
+          - name: registry-ca
+            secret:
+              secretName: registry-smoke-credentials
         restartPolicy: Never
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
@@ -63,13 +150,46 @@
   changed_when: false
   delegate_to: localhost
 
-- name: Test access to registry from pod
-  ansible.builtin.shell: |
-    kubectl exec -n default registry-tester --kubeconfig={{ kubeconfig_local_path }} -- \
-    wget -qO- http://{{ registry_name }}.{{ registry_namespace }}.svc.cluster.local:{{ registry_port }}/v2/
+- name: Test authenticated TLS access to registry from pod
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - exec
+      - -n
+      - default
+      - registry-tester
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+      - --
+      - sh
+      - -c
+      - >-
+        AUTH=$(printf "%s:%s" "$REGISTRY_USERNAME" "$REGISTRY_PASSWORD" | base64 | tr -d "\n");
+        wget -qO- --header="Authorization: Basic $AUTH"
+        https://{{ registry_cluster_dns_name }}:{{ registry_verify_port }}/v2/
   register: wget_test
   changed_when: false
-  failed_when: "'{}' not in wget_test.stdout"
+  failed_when: wget_test.rc != 0
+  delegate_to: localhost
+
+- name: Test Zot metrics endpoint from pod
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - exec
+      - -n
+      - default
+      - registry-tester
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+      - --
+      - sh
+      - -c
+      - >-
+        AUTH=$(printf "%s:%s" "$REGISTRY_METRICS_USERNAME" "$REGISTRY_METRICS_PASSWORD" | base64 | tr -d "\n");
+        wget -qO- --header="Authorization: Basic $AUTH"
+        https://{{ registry_cluster_dns_name }}:{{ registry_verify_port }}/metrics
+  register: registry_metrics_test
+  changed_when: false
+  failed_when: "'# HELP' not in registry_metrics_test.stdout"
   delegate_to: localhost
 
 - name: Show registry test result
@@ -83,4 +203,17 @@
     name: registry-tester
     namespace: default
     kubeconfig: "{{ kubeconfig_local_path }}"
+    delete_options:
+      gracePeriodSeconds: 0
+  delegate_to: localhost
+
+- name: Delete isolated registry smoke credentials
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Secret
+    name: registry-smoke-credentials
+    namespace: default
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  no_log: true
   delegate_to: localhost

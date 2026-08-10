@@ -1,0 +1,20 @@
+---
+- name: Remove verified empty legacy registry workloads
+  kubernetes.core.k8s:
+    state: absent
+    api_version: "{{ item.1.api_version }}"
+    kind: "{{ item.1.kind }}"
+    namespace: "{{ item.0 }}"
+    name: "{{ registry_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  loop: "{{ registry_installed_legacy_namespaces | default([]) | product(registry_legacy_resource_kinds) | list }}"
+  vars:
+    registry_legacy_resource_kinds:
+      - api_version: apps/v1
+        kind: Deployment
+      - api_version: v1
+        kind: Service
+  when:
+    - registry_migrate_legacy | bool
+    - registry_installed_legacy_namespaces | default([]) | length > 0
+  delegate_to: localhost

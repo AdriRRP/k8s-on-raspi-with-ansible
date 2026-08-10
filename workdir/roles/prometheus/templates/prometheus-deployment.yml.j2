@@ -15,6 +15,9 @@ spec:
     metadata:
       annotations:
         checksum/config: "{{ lookup('template', 'prometheus-configmap.yml.j2') | hash('sha256') }}"
+{% if registry_tls_enabled | bool %}
+        checksum/zot-auth: "{{ (lookup('ansible.builtin.file', registry_ca_cert_path) ~ lookup('ansible.builtin.file', registry_metrics_password_path)) | hash('sha256') }}"
+{% endif %}
       labels:
         app: prometheus
     spec:
@@ -66,12 +69,23 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/prometheus
+{% if registry_tls_enabled | bool %}
+            - name: zot-auth
+              mountPath: /etc/prometheus/zot-auth
+              readOnly: true
+{% endif %}
             - name: data
               mountPath: /prometheus
       volumes:
         - name: config
           configMap:
             name: prometheus-config
+{% if registry_tls_enabled | bool %}
+        - name: zot-auth
+          secret:
+            secretName: zot-scrape-credentials
+            defaultMode: 0440
+{% endif %}
         - name: data
           persistentVolumeClaim:
             claimName: prometheus-pvc

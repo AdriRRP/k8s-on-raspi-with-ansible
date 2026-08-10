@@ -1,0 +1,56 @@
+---
+- name: Validate registry client trust inputs
+  ansible.builtin.assert:
+    that:
+      - registry_hostname | length > 0
+      - registry_lb_ip | length > 0
+      - registry_external_port | int > 0
+  when: registry_tls_enabled | bool
+
+- name: Resolve the private registry endpoint on every cluster node
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED PRIVATE REGISTRY"
+    block: "{{ registry_lb_ip }} {{ registry_hostname }}"
+    owner: root
+    group: root
+    mode: '0644'
+  when: registry_tls_enabled | bool
+
+- name: Create registry trust directories
+  ansible.builtin.file:
+    path: "{{ registry_containerd_cert_root }}/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ registry_hostname }}:{{ registry_external_port }}"
+    - "{{ registry_lb_ip }}:{{ registry_external_port }}"
+  when: registry_tls_enabled | bool
+
+- name: Install registry CA for containerd endpoints
+  ansible.builtin.copy:
+    src: "{{ registry_ca_cert_path }}"
+    dest: "{{ registry_containerd_cert_root }}/{{ item }}/ca.crt"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - "{{ registry_hostname }}:{{ registry_external_port }}"
+    - "{{ registry_lb_ip }}:{{ registry_external_port }}"
+  when: registry_tls_enabled | bool
+
+- name: Configure verified containerd registry endpoints
+  ansible.builtin.template:
+    src: hosts.toml.j2
+    dest: "{{ registry_containerd_cert_root }}/{{ item }}/hosts.toml"
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - "{{ registry_hostname }}:{{ registry_external_port }}"
+    - "{{ registry_lb_ip }}:{{ registry_external_port }}"
+  vars:
+    registry_client_endpoint: "{{ item }}"
+  when: registry_tls_enabled | bool

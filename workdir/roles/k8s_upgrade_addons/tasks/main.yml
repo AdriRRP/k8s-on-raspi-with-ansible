@@ -67,12 +67,25 @@
   kubernetes.core.k8s_info:
     api_version: apps/v1
     kind: Deployment
-    namespace: "{{ registry_namespace }}"
+    namespace: "{{ item }}"
     name: "{{ registry_name }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   register: upgrade_registry_deployment
   delegate_to: localhost
-  when: registry_namespace in upgrade_detected_namespace_names
+  loop: "{{ ([registry_namespace] + registry_legacy_namespaces) | unique }}"
+  when: item in upgrade_detected_namespace_names
+
+- name: Combine registry deployments across current and legacy namespaces
+  ansible.builtin.set_fact:
+    upgrade_registry_deployments: >-
+      {{
+        upgrade_registry_deployment.results
+        | default([])
+        | selectattr('resources', 'defined')
+        | map(attribute='resources')
+        | flatten
+      }}
+  delegate_to: localhost
 
 - name: Query MetalLB controller deployment
   kubernetes.core.k8s_info:
@@ -94,7 +107,16 @@
       }}
     upgrade_has_metallb: "{{ (upgrade_metallb_controller.resources | default([])) | length > 0 }}"
     upgrade_has_nfs_provisioner: "{{ (upgrade_nfs_provisioner_deployment.resources | default([])) | length > 0 }}"
-    upgrade_has_registry: "{{ (upgrade_registry_deployment.resources | default([])) | length > 0 }}"
+    upgrade_has_registry: "{{ upgrade_registry_deployments | length > 0 }}"
+    upgrade_registry_existing_namespace: >-
+      {{
+        (
+          upgrade_registry_deployments
+          | selectattr('metadata.name', 'equalto', registry_name)
+          | map(attribute='metadata.namespace')
+          | first
+        ) | default(registry_namespace)
+      }}
     upgrade_has_metrics_server: >-
       {{ (upgrade_metrics_server_deployment.resources | default([])) | length > 0 }}
     upgrade_has_prometheus: >-
@@ -158,6 +180,7 @@
       metallb: "{{ upgrade_has_metallb }}"
       nfs_provisioner: "{{ upgrade_has_nfs_provisioner }}"
       registry: "{{ upgrade_has_registry }}"
+      registry_namespace: "{{ upgrade_registry_existing_namespace }}"
       prometheus: "{{ upgrade_has_prometheus }}"
       node_exporter: "{{ upgrade_has_node_exporter }}"
       kube_state_metrics: "{{ upgrade_has_kube_state_metrics }}"

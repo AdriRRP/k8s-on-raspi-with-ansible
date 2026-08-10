@@ -13,3 +13,11 @@
   roles:
     - role: cluster_preflight
     - registry
+
+- name: Configure authenticated registry trust on every cluster node
+  hosts: cluster
+  gather_facts: false
+  become: true
+
+  roles:
+    - registry_client

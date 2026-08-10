@@ -6,6 +6,11 @@
     mode: "0750"
   delegate_to: localhost
 
+- name: Freeze snapshot target path for this role execution
+  ansible.builtin.set_fact:
+    k8s_upgrade_snapshot_target_file_resolved: "{{ k8s_upgrade_snapshot_target_file }}"
+  delegate_to: localhost
+
 - name: Capture cluster upgrade snapshot
   ansible.builtin.command:
     argv: >-
@@ -16,7 +21,7 @@
           '--kubeconfig',
           kubeconfig_local_path,
           '--output',
-          k8s_upgrade_snapshot_target_file
+          k8s_upgrade_snapshot_target_file_resolved
         ]
         + (
           upgrade_replicated_workload_exempt_namespaces
@@ -32,9 +37,16 @@
   changed_when: false
   delegate_to: localhost
 
+- name: Verify captured snapshot exists
+  ansible.builtin.stat:
+    path: "{{ k8s_upgrade_snapshot_target_file_resolved }}"
+  register: captured_upgrade_snapshot_stat
+  failed_when: not captured_upgrade_snapshot_stat.stat.isreg | default(false)
+  delegate_to: localhost
+
 - name: Read captured cluster upgrade snapshot
   ansible.builtin.slurp:
-    src: "{{ k8s_upgrade_snapshot_target_file }}"
+    src: "{{ k8s_upgrade_snapshot_target_file_resolved }}"
   register: captured_upgrade_snapshot_raw
   delegate_to: localhost
 

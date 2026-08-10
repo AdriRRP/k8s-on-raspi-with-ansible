@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ registry_name }}-config
+  namespace: {{ registry_namespace }}
+data:
+  config.json: |
+    {
+      "distSpecVersion": "1.1.1",
+      "scheduler": {
+        "numWorkers": {{ registry_scheduler_workers }}
+      },
+      "storage": {
+        "rootDirectory": "/var/lib/zot",
+        "commit": true,
+        "dedupe": false,
+        "gc": true,
+        "gcDelay": "{{ registry_gc_delay }}",
+        "gcInterval": "{{ registry_gc_interval }}"
+      },
+      "http": {
+        "address": "0.0.0.0",
+        "port": "{{ registry_port }}",
+        "compat": ["docker2s2"]{% if registry_tls_enabled | bool %},
+        "tls": {
+          "cert": "/etc/zot/security/tls.crt",
+          "key": "/etc/zot/security/tls.key"
+        },
+        "auth": {
+          "failDelay": {{ registry_auth_failure_delay_seconds }},
+          "htpasswd": {
+            "path": "/etc/zot/security/htpasswd"
+          }
+        },
+        "accessControl": {
+          "metrics": {
+            "users": ["{{ registry_metrics_username }}"]
+          },
+          "repositories": {},
+          "adminPolicy": {
+            "users": ["{{ registry_admin_username }}"],
+            "actions": ["read", "create", "update", "delete"]
+          }
+        }
+{% endif %}
+      },
+      "log": {
+        "level": "info"
+      },
+      "extensions": {
+        "metrics": {
+          "enable": true,
+          "prometheus": {
+            "path": "/metrics"
+          }
+        },
+        "scrub": {
+          "enable": true,
+          "interval": "{{ registry_scrub_interval }}"
+        }
+      }
+    }

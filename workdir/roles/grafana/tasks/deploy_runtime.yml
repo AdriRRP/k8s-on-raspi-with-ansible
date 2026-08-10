@@ -25,8 +25,8 @@
     name: grafana
     kubeconfig: "{{ kubeconfig_local_path }}"
   register: grafana_deployment
-  retries: 20
-  delay: 5
+  retries: "{{ grafana_rollout_retries }}"
+  delay: "{{ grafana_rollout_delay }}"
   until:
     - grafana_deployment.resources | length > 0
     - >-

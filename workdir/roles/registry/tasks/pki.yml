@@ -1,0 +1,215 @@
+---
+- name: Create private registry PKI directory
+  ansible.builtin.file:
+    path: "{{ registry_pki_dir }}"
+    state: directory
+    mode: '0700'
+  delegate_to: localhost
+
+- name: Generate persistent registry passwords
+  ansible.builtin.set_fact:
+    registry_admin_password: >-
+      {{ lookup('ansible.builtin.password', registry_admin_password_path ~ ' length=32 chars=ascii_letters,digits') }}
+    registry_metrics_password: >-
+      {{ lookup('ansible.builtin.password', registry_metrics_password_path ~ ' length=32 chars=ascii_letters,digits') }}
+  no_log: true
+  delegate_to: localhost
+
+- name: Protect generated password files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: '0600'
+  loop:
+    - "{{ registry_admin_password_path }}"
+    - "{{ registry_metrics_password_path }}"
+  delegate_to: localhost
+
+- name: Inspect registry PKI artifacts
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ registry_ca_key_path }}"
+    - "{{ registry_ca_cert_path }}"
+    - "{{ registry_server_key_path }}"
+    - "{{ registry_server_cert_path }}"
+    - "{{ registry_htpasswd_path }}"
+  register: registry_pki_artifacts
+  delegate_to: localhost
+
+- name: Generate private CA key
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - genpkey
+      - -algorithm
+      - EC
+      - -pkeyopt
+      - ec_paramgen_curve:P-256
+      - -out
+      - "{{ registry_ca_key_path }}"
+  when: not registry_pki_artifacts.results[0].stat.exists
+  changed_when: true
+  no_log: true
+  delegate_to: localhost
+
+- name: Generate private CA certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -new
+      - -sha256
+      - -key
+      - "{{ registry_ca_key_path }}"
+      - -days
+      - '3650'
+      - -subj
+      - /CN=Raspberry Kubernetes Registry CA
+      - -addext
+      - basicConstraints=critical,CA:TRUE,pathlen:0
+      - -addext
+      - keyUsage=critical,keyCertSign,cRLSign
+      - -out
+      - "{{ registry_ca_cert_path }}"
+  when: not registry_pki_artifacts.results[1].stat.exists
+  changed_when: true
+  delegate_to: localhost
+
+- name: Generate registry server key
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - genpkey
+      - -algorithm
+      - EC
+      - -pkeyopt
+      - ec_paramgen_curve:P-256
+      - -out
+      - "{{ registry_server_key_path }}"
+  when: not registry_pki_artifacts.results[2].stat.exists
+  changed_when: true
+  no_log: true
+  delegate_to: localhost
+
+- name: Check registry certificate renewal window
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -checkend
+      - "{{ (registry_certificate_renewal_days | int * 86400) | string }}"
+      - -noout
+      - -in
+      - "{{ registry_server_cert_path }}"
+  register: registry_certificate_validity
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Generate registry certificate request
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -sha256
+      - -key
+      - "{{ registry_server_key_path }}"
+      - -subj
+      - "/CN={{ registry_hostname }}"
+      - -addext
+      - >-
+        subjectAltName={{
+          [
+            'DNS:' ~ registry_hostname,
+            'DNS:' ~ registry_cluster_dns_name,
+            'DNS:' ~ registry_name,
+            'IP:' ~ registry_lb_ip
+          ] | join(',') }}
+      - -out
+      - "{{ registry_pki_dir }}/tls.csr"
+  when: registry_certificate_validity.rc != 0
+  changed_when: true
+  delegate_to: localhost
+
+- name: Sign registry server certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -req
+      - -sha256
+      - -in
+      - "{{ registry_pki_dir }}/tls.csr"
+      - -CA
+      - "{{ registry_ca_cert_path }}"
+      - -CAkey
+      - "{{ registry_ca_key_path }}"
+      - -CAcreateserial
+      - -days
+      - "{{ registry_certificate_validity_days | string }}"
+      - -copy_extensions
+      - copyall
+      - -out
+      - "{{ registry_server_cert_path }}"
+  when: registry_certificate_validity.rc != 0
+  changed_when: true
+  delegate_to: localhost
+
+- name: Create bcrypt identity database
+  ansible.builtin.command:
+    argv:
+      - htpasswd
+      - -cbB
+      - "{{ registry_htpasswd_path }}"
+      - "{{ registry_admin_username }}"
+      - "{{ registry_admin_password }}"
+  when: not registry_pki_artifacts.results[4].stat.exists
+  changed_when: true
+  no_log: true
+  delegate_to: localhost
+
+- name: Add Prometheus metrics identity
+  ansible.builtin.command:
+    argv:
+      - htpasswd
+      - -bB
+      - "{{ registry_htpasswd_path }}"
+      - "{{ registry_metrics_username }}"
+      - "{{ registry_metrics_password }}"
+  when: not registry_pki_artifacts.results[4].stat.exists
+  changed_when: true
+  no_log: true
+  delegate_to: localhost
+
+- name: Protect private registry artifacts
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ registry_ca_key_path }}"
+      mode: '0600'
+    - path: "{{ registry_server_key_path }}"
+      mode: '0600'
+    - path: "{{ registry_htpasswd_path }}"
+      mode: '0600'
+    - path: "{{ registry_ca_cert_path }}"
+      mode: '0644'
+    - path: "{{ registry_server_cert_path }}"
+      mode: '0644'
+  no_log: true
+  delegate_to: localhost
+
+- name: Write registry connection details outside Git
+  ansible.builtin.copy:
+    dest: "{{ registry_credentials_file }}"
+    mode: '0600'
+    content: |
+      url=https://{{ registry_hostname }}:{{ registry_external_port }}
+      ip_url=https://{{ registry_lb_ip }}:{{ registry_external_port }}
+      username={{ registry_admin_username }}
+      password={{ registry_admin_password }}
+      ca={{ registry_ca_cert_path }}
+  no_log: true
+  delegate_to: localhost

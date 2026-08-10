@@ -30,11 +30,13 @@ RUN if [ -z "$ARCH_NAME" ]; then \
     fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    apache2-utils \
     bash \
     ca-certificates \
     curl \
     git \
     openssh-client \
+    openssl \
     python3 \
     python3-pip \
     python3-venv \

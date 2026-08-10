@@ -2,9 +2,9 @@
 - name: Detect target architecture and normalize
   ansible.builtin.set_fact:
     arch: >-
-      {{ 'arm64' if ansible_architecture in ['aarch64', 'armv8l'] else
-         'amd64' if ansible_architecture in ['x86_64'] else
-         ansible_architecture }}
+      {{ 'arm64' if ansible_facts.architecture in ['aarch64', 'armv8l'] else
+         'amd64' if ansible_facts.architecture in ['x86_64'] else
+         ansible_facts.architecture }}
 
 - name: Validate runtime artifact support for target architecture
   ansible.builtin.assert:
@@ -165,7 +165,7 @@
   args:
     creates: /etc/containerd/config.toml
   environment:
-    PATH: "/usr/local/bin:/usr/local/sbin:{{ ansible_env.PATH }}"
+    PATH: "/usr/local/bin:/usr/local/sbin:{{ ansible_facts.env.PATH }}"
   notify: Restart containerd
   become: true
 

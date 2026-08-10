@@ -47,7 +47,8 @@ spec:
               path: /api/health
               port: http
             periodSeconds: 5
-            failureThreshold: 24
+            timeoutSeconds: {{ grafana_startup_probe_timeout }}
+            failureThreshold: {{ grafana_startup_probe_failure_threshold }}
           readinessProbe:
             httpGet:
               path: /api/health

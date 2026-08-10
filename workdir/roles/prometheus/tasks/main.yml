@@ -25,6 +25,23 @@
     definition: "{{ lookup('template', 'prometheus-clusterrolebinding.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
 
+- name: Create least-scope Zot scrape credentials
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: zot-scrape-credentials
+        namespace: "{{ monitoring_namespace }}"
+      type: Opaque
+      stringData:
+        ca.crt: "{{ lookup('ansible.builtin.file', registry_ca_cert_path) }}"
+        username: "{{ registry_metrics_username }}"
+        password: "{{ lookup('ansible.builtin.file', registry_metrics_password_path) }}"
+  no_log: true
+  when: registry_tls_enabled | bool
+
 - name: Create ConfigMap for Prometheus configuration
   kubernetes.core.k8s:
     state: present
@@ -156,6 +173,46 @@
   failed_when: >-
     '"status":"success"' not in prometheus_kubernetes_scrape_checks.stdout
     or '"result":[]' in prometheus_kubernetes_scrape_checks.stdout
+  delegate_to: localhost
+
+- name: Detect Zot registry service
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ registry_namespace }}"
+    name: "{{ registry_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: prometheus_zot_registry_service
+  delegate_to: localhost
+
+- name: Verify Prometheus is scraping Zot when installed
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - exec
+      - -n
+      - "{{ monitoring_namespace }}"
+      - prometheus-smoke
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+      - --
+      - wget
+      - -qO-
+      - >-
+        http://prometheus.{{ monitoring_namespace }}.svc.cluster.local:9090/api/v1/query?query={{
+          'up{job="zot-registry"}' | urlencode
+        }}
+  register: prometheus_zot_scrape_check
+  retries: 12
+  delay: 5
+  until:
+    - >-
+      '"status":"success"' in prometheus_zot_scrape_check.stdout
+    - >-
+      '"result":[]' not in prometheus_zot_scrape_check.stdout
+    - >-
+      '"1"' in prometheus_zot_scrape_check.stdout
+  when: prometheus_zot_registry_service.resources | length > 0
+  changed_when: false
   delegate_to: localhost
 
 - name: Detect optional NodeLocal DNS deployment

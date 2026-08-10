@@ -5,6 +5,7 @@ metadata:
   namespace: {{ registry_namespace }}
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
   strategy:
     type: Recreate
   selector:
@@ -12,35 +13,55 @@ spec:
       app: {{ registry_name }}
   template:
     metadata:
+      annotations:
+        checksum/config: "{{ lookup('template', 'registry-configmap.yml.j2') | hash('sha256') }}"
+{% if registry_tls_enabled | bool %}
+        checksum/security: "{{ (lookup('ansible.builtin.file', registry_server_cert_path) ~ lookup('ansible.builtin.file', registry_htpasswd_path)) | hash('sha256') }}"
+{% endif %}
       labels:
         app: {{ registry_name }}
     spec:
       automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ registry_run_as_user }}
+        runAsGroup: {{ registry_run_as_group }}
+        fsGroup: {{ registry_run_as_group }}
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: registry
           image: {{ registry_image }}
           imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - /etc/zot/config.json
           env:
-            - name: REGISTRY_STORAGE_DELETE_ENABLED
-              value: "true"
+            - name: TMPDIR
+              value: /var/lib/zot/.tmp
           ports:
-            - name: http
+            - name: registry
               containerPort: {{ registry_port }}
-          livenessProbe:
-            httpGet:
-              path: /v2/
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /v2/
-              port: http
-            initialDelaySeconds: 5
+          startupProbe:
+            tcpSocket:
+              port: registry
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          livenessProbe:
+            tcpSocket:
+              port: registry
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          readinessProbe:
+            tcpSocket:
+              port: registry
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
           resources:
             requests:
               cpu: 100m
@@ -49,14 +70,36 @@ spec:
               cpu: 500m
               memory: 512Mi
           securityContext:
+            runAsNonRoot: true
+            runAsUser: {{ registry_run_as_user }}
+            runAsGroup: {{ registry_run_as_group }}
+            readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
           volumeMounts:
+            - name: registry-config
+              mountPath: /etc/zot/config.json
+              subPath: config.json
+              readOnly: true
+{% if registry_tls_enabled | bool %}
+            - name: registry-security
+              mountPath: /etc/zot/security
+              readOnly: true
+{% endif %}
             - name: registry-storage
-              mountPath: /var/lib/registry
+              mountPath: /var/lib/zot
       volumes:
+        - name: registry-config
+          configMap:
+            name: {{ registry_name }}-config
+{% if registry_tls_enabled | bool %}
+        - name: registry-security
+          secret:
+            secretName: {{ registry_name }}-security
+            defaultMode: 0440
+{% endif %}
         - name: registry-storage
 {% if registry_persistence_enabled | bool %}
           persistentVolumeClaim:

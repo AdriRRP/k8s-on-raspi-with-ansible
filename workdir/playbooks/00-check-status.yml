@@ -11,20 +11,22 @@
 
     - name: Show CPU information
       ansible.builtin.debug:
-        var: ansible_processor
+        msg: "{{ ansible_facts.processor }}"
 
     - name: Show total memory (in MB)
       ansible.builtin.debug:
-        var: ansible_memtotal_mb
+        msg: "{{ ansible_facts.memtotal_mb }}"
 
     - name: Show disk usage (root mount point)
       ansible.builtin.debug:
-        var: ansible_mounts
+        msg: "{{ ansible_facts.mounts }}"
 
     - name: Show network interfaces
       ansible.builtin.debug:
-        var: ansible_interfaces
+        msg: "{{ ansible_facts.interfaces }}"
 
     - name: Show operating system and architecture
       ansible.builtin.debug:
-        msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} ({{ ansible_architecture }})"
+        msg: >-
+          {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+          ({{ ansible_facts.architecture }})

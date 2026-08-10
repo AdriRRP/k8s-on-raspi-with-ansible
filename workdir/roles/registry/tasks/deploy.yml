@@ -10,12 +10,62 @@
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
+- name: Enforce restricted Pod Security on dedicated registry namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ registry_namespace }}"
+        labels:
+          pod-security.kubernetes.io/enforce: restricted
+          pod-security.kubernetes.io/enforce-version: latest
+          pod-security.kubernetes.io/audit: restricted
+          pod-security.kubernetes.io/warn: restricted
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  when: registry_namespace not in ['default', 'kube-system', 'kube-public', 'kube-node-lease']
+  delegate_to: localhost
+
 - name: Create registry PVC when persistence is enabled
   kubernetes.core.k8s:
     state: present
     definition: "{{ lookup('template', 'registry-pvc.yml.j2') | from_yaml }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   when: registry_persistence_enabled | bool
+  delegate_to: localhost
+
+- name: Create registry TLS and authentication Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ registry_name }}-security"
+        namespace: "{{ registry_namespace }}"
+      type: Opaque
+      stringData:
+        ca.crt: "{{ lookup('ansible.builtin.file', registry_ca_cert_path) }}"
+        tls.crt: "{{ lookup('ansible.builtin.file', registry_server_cert_path) }}"
+        tls.key: "{{ lookup('ansible.builtin.file', registry_server_key_path) }}"
+        htpasswd: "{{ lookup('ansible.builtin.file', registry_htpasswd_path) }}"
+  no_log: true
+  when: registry_tls_enabled | bool
+  delegate_to: localhost
+
+- name: Create Zot configuration
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'registry-configmap.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Restrict registry ingress to cluster workloads
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'registry-networkpolicy.yml.j2') | from_yaml }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 
 - name: Deploy registry

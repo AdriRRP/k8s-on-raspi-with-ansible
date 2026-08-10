@@ -1,0 +1,57 @@
+---
+- name: Query legacy registry deployments
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ item }}"
+    name: "{{ registry_name }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  loop: "{{ registry_legacy_namespaces | difference([registry_namespace]) }}"
+  register: registry_legacy_deployments
+  delegate_to: localhost
+
+- name: Record installed legacy registry namespaces
+  ansible.builtin.set_fact:
+    registry_installed_legacy_namespaces: >-
+      {{
+        registry_installed_legacy_namespaces | default([])
+        + ([item.item] if item.resources | default([]) | length > 0 else [])
+      }}
+  loop: "{{ registry_legacy_deployments.results }}"
+
+- name: Query legacy registry catalogs
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - "--kubeconfig={{ kubeconfig_local_path }}"
+      - get
+      - >-
+        --raw=/api/v1/namespaces/{{ item }}/services/http:{{ registry_name }}:{{ registry_port
+        }}/proxy/v2/_catalog
+  loop: "{{ registry_installed_legacy_namespaces | default([]) }}"
+  register: registry_legacy_catalogs
+  changed_when: false
+  failed_when: false
+  delegate_to: localhost
+
+- name: Refuse implicit migration of non-empty legacy registries
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - >-
+        registry_allow_nonempty_legacy_migration | bool
+        or (item.stdout | from_json).repositories | length == 0
+    fail_msg: >-
+      Registry {{ item.item }}/{{ registry_name }} contains images or its catalog could not be read.
+      Export and restore those OCI artifacts before setting registry_allow_nonempty_legacy_migration=true.
+  loop: "{{ registry_legacy_catalogs.results | default([]) }}"
+  when: registry_migrate_legacy | bool
+
+- name: Require explicit migration when a legacy registry exists
+  ansible.builtin.assert:
+    that:
+      - registry_migrate_legacy | bool
+    fail_msg: >-
+      A legacy registry exists in {{ registry_installed_legacy_namespaces | join(', ') }}.
+      Enable registry_migrate_legacy after reviewing its catalog.
+  when: registry_installed_legacy_namespaces | default([]) | length > 0

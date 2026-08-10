@@ -7,7 +7,7 @@
         upgrade_execution_mode == 'apply'
         and upgrade_maintenance_scope in ['cluster', 'os']
         and upgrade_os_release_nodes | bool
-        and ansible_distribution_version is version(
+        and ansible_facts.distribution_version is version(
           (
             hostvars['localhost'].upgrade_effective_target_os_version
             | default(upgrade_target_os_version)
@@ -46,7 +46,7 @@
       {{
         'lts'
         if (
-          ansible_distribution_version is match('^\\d+\\.04$')
+          ansible_facts.distribution_version is match('^\\d+\\.04$')
           and (
             hostvars['localhost'].upgrade_effective_target_os_version
             | default(upgrade_target_os_version)
@@ -250,6 +250,39 @@
         enabled: true
       when: worker_upgrade_kubernetes | bool
       become: true
+
+    - name: Reconcile container runtime on worker node
+      ansible.builtin.include_role:
+        name: containerd
+      when: upgrade_reconcile_runtime | bool
+
+    - name: Apply pending container runtime restart on worker node
+      ansible.builtin.meta: flush_handlers
+      when: upgrade_reconcile_runtime | bool
+
+    - name: Verify containerd version on worker node
+      vars:
+        expected_containerd_version: "{{ platform_release_catalog.runtime.containerd_version }}"
+      ansible.builtin.command:
+        argv:
+          - containerd
+          - --version
+      register: worker_containerd_version
+      changed_when: false
+      failed_when: expected_containerd_version not in worker_containerd_version.stdout
+      when: upgrade_reconcile_runtime | bool
+
+    - name: Verify runc version on worker node
+      vars:
+        expected_runc_version: "{{ platform_release_catalog.runtime.runc_version }}"
+      ansible.builtin.command:
+        argv:
+          - runc
+          - --version
+      register: worker_runc_version
+      changed_when: false
+      failed_when: expected_runc_version not in worker_runc_version.stdout
+      when: upgrade_reconcile_runtime | bool
 
     - name: Wait until upgraded worker node is Ready
       kubernetes.core.k8s_info:

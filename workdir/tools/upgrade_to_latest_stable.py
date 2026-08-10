@@ -337,16 +337,39 @@ def main():
         if key
         in {
             "upgrade_target_kubernetes_deb_revision",
+            "upgrade_os_patch_nodes",
             "upgrade_enforce_replicated_workloads",
             "upgrade_require_pdb_protection",
             "upgrade_allow_single_replica_workloads",
             "upgrade_reconcile_platform_addons",
+            "upgrade_reconcile_runtime",
             "upgrade_delete_emptydir_data",
             "upgrade_force_drain",
             "upgrade_drain_timeout",
             "upgrade_drain_grace_period",
         }
     }
+
+    if not os_hops and not kubernetes_hops:
+        command = build_playbook_command(
+            UPGRADE_PLAYBOOK,
+            {
+                **passthrough_vars,
+                "upgrade_execution_mode": "apply",
+                "upgrade_maintenance_scope": maintenance_scope,
+                "upgrade_os_release_nodes": "false",
+                "upgrade_target_os_version": os_target,
+                "upgrade_target_kubernetes_version": kubernetes_target,
+                "upgrade_target_kubernetes_deb_revision": resolve_kubernetes_deb_revision(
+                    kubernetes_target, catalog
+                ),
+                "upgrade_reconcile_platform_addons": "true",
+            },
+        )
+        print("Las versiones ya coinciden; ejecutando mantenimiento, runtime y reconciliado")
+        subprocess.run(command, check=True, cwd="/home/ansible/workdir")
+        return 0
+
     for hop in os_hops:
         command = build_playbook_command(
             UPGRADE_PLAYBOOK,

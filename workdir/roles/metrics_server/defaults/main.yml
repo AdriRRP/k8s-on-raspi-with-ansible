@@ -10,7 +10,7 @@ metrics_server_supported_images: >-
   {{ platform_release_catalog.observability.metrics_server_images }}
 metrics_server_kubelet_insecure_tls: true
 metrics_server_metric_resolution: 15s
-metrics_server_replicas: 1
+metrics_server_replicas: 2
 metrics_server_cpu_request: 100m
 metrics_server_memory_request: 200Mi
 metrics_server_cpu_limit: 300m

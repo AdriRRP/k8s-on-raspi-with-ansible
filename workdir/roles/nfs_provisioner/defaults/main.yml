@@ -6,5 +6,7 @@ nfs_provisioner_image: >-
 nfs_server: "{{ hostvars[groups['master'] | first].ansible_host }}"
 nfs_path: "/mnt/nfs-ssd"
 storage_class_name: "raspi-nfs-provisioner"
+nfs_test_storage_class_name: "{{ storage_class_name }}-smoke"
 kubeconfig_local_path: /home/ansible/.kube/config
 set_storageclass_default: true
+nfs_provisioner_replicas: 2

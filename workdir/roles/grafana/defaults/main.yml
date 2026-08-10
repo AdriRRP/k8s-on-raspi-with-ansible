@@ -11,3 +11,7 @@ grafana_provision_bundled_dashboards: false
 grafana_force_reset_persistent_state: false
 grafana_auto_reset_persistent_state_on_provisioning_failure: false
 grafana_provisioning_failure_log_pattern: "Datasource provisioning error: data source not found"
+grafana_rollout_retries: 72
+grafana_rollout_delay: 5
+grafana_startup_probe_failure_threshold: 60
+grafana_startup_probe_timeout: 3

@@ -114,7 +114,7 @@ Important defaults:
 | MetalLB pool | `192.168.0.240-192.168.0.250` |
 | Pod network | `10.244.0.0/16`, must not overlap the node LAN |
 | Service network | `10.96.0.0/12`, must not overlap node or pod networks |
-| Registry | persistent, internal `ClusterIP` |
+| Registry | Zot at `https://192.168.0.240`, private CA and bcrypt authentication |
 | Prometheus | 7-day retention, 10 GiB PVC |
 | Metrics Server | native CPU/memory Metrics API for Lens, `kubectl top` and HPA |
 | Grafana | internal `ClusterIP`, generated admin password |
@@ -125,6 +125,38 @@ silently migrated.
 
 Generated passwords, kubeconfig files, snapshots and reports are written below
 `config/.kube/outputs/`.
+
+### OCI registry
+
+The registry is Zot: a single ARM64-compatible OCI registry process,
+not a Nexus/Harbor-style platform. It uses a persistent PVC, synchronous writes,
+inline garbage collection, weekly integrity scrubbing, Prometheus metrics, a
+restricted Pod security context and LAN-scoped ingress. Search, UI, CVE feeds,
+mirroring and other extensions remain disabled to keep Raspberry Pi overhead low.
+
+The role migrates an empty legacy `registry:2` installation from `kube-system`
+to the dedicated `registry` namespace only after Zot passes its health, storage
+and metrics checks. It refuses to remove a legacy registry containing images;
+export those OCI artifacts first and rehearse their restore before allowing a
+non-empty migration. It exposes `192.168.0.240:443` through MetalLB with native
+TLS, bcrypt Basic Auth and identity-based authorization. Ansible maintains a
+private ECDSA CA, rotates the 90-day server certificate within 30 days of expiry,
+installs CA trust for containerd on every node and gives Prometheus a metrics-only
+identity. Private keys and generated passwords remain below
+`config/.kube/outputs/registry-pki/`; connection details are written with mode
+`0600` to `config/.kube/outputs/registry-credentials`.
+
+LAN clients must trust `config/.kube/outputs/registry-pki/ca.crt` and resolve
+`registry.home.arpa` to `192.168.0.240`. For example, after installing that CA:
+
+```bash
+docker login registry.home.arpa
+```
+
+Let's Encrypt is intentionally not used for the private RFC1918 address. Its IP
+certificates require a publicly reachable address and six-day renewal; use a
+public DNS name plus an audited ACME challenge if the service is ever exposed to
+the Internet.
 
 Access internal services without exposing them to the LAN:
 
@@ -189,6 +221,19 @@ overridden for a staged operation:
 KUBECTL_VERSION=v1.36.3 ./cluster-control.sh --build
 ```
 
+Workload images are pinned by multi-architecture digest where the deployment is
+owned directly by this repository. Audit the catalog against stable upstream
+releases without changing the cluster:
+
+```bash
+./cluster-control.sh --release-audit
+```
+
+GitHub Actions runs the same read-only audit every Monday. A reported release
+still requires compatibility review, checksum/digest refresh and the normal
+validation gate before it becomes the catalogued version. Set `GITHUB_TOKEN`
+when running repeated local audits to avoid GitHub's anonymous API limit.
+
 ## Upgrades
 
 Discovery tries the existing kubeconfig first and falls back to the static
@@ -239,6 +284,9 @@ The preflight rejects unsupported version skips, unhealthy nodes, unsafe
 single-replica workloads and missing PodDisruptionBudgets unless an explicit
 override is supplied. Overrides such as `--allow-single-replica` and
 `--allow-no-pdb` reduce availability guarantees and should be exceptional.
+Each node window also reconciles and verifies containerd, runc and CNI plugins
+while the node is cordoned and drained. Use `--disable-runtime-reconcile` only
+for a deliberately Kubernetes/OS-only maintenance run.
 Drain also refuses unmanaged Pods by default; use
 `-- -e upgrade_force_drain=true` only after inspecting them. Ephemeral
 `emptyDir` data is deleted during an accepted drain.
@@ -350,6 +398,22 @@ preparation lifecycle:
 ./cluster-control.sh --reconcile-node-hygiene
 ```
 
+Audit retired persistent volumes without deleting anything, then apply the
+allowlisted cleanup after reviewing
+`config/.kube/outputs/storage-hygiene/released-pvs.json`:
+
+```bash
+./cluster-control.sh --storage-hygiene
+./cluster-control.sh --storage-hygiene --apply-storage-cleanup
+```
+
+Verify that a maintenance window left no pending packages, required reboot,
+failed units, missing Raspberry Pi firmware package or excessive I/O pressure:
+
+```bash
+./cluster-control.sh --maintenance-audit
+```
+
 Networking defaults to kube-proxy `iptables` and Calico `Iptables`. The nftables
 path is opt-in and both components must be changed together:
 
@@ -421,7 +485,8 @@ Build and validate against a clean toolchain in one invocation:
 
 The CI workflow uses read-only permissions, immutable action SHAs and the same
 pinned control image. Dependabot checks Actions, Docker and Python dependencies
-weekly; platform catalog updates still require an explicit validation change.
+weekly; a scheduled read-only job detects stale platform releases, which still
+require an explicit validation change.
 
 ## Repository layout
 
@@ -457,8 +522,9 @@ weekly; platform catalog updates still require an explicit validation change.
 | P0 | Accept control-plane recovery and move to three control-plane nodes or replicated external etcd | Three consecutive replacement-media fire-drills restore a healthy cluster without using the original system disk |
 | P0 | Protect persistent application data and etcd independently of the cluster | Scheduled, encrypted backups pass automated restore tests on disposable storage |
 | P1 | Remove the NFS single point of failure | Storage survives loss of one node or disk and workloads recover within a documented objective |
+| P1 | Make stateful platform services genuinely HA | Zot, Prometheus and Grafana use independent replicated storage rather than multiple Pods sharing the same NFS failure domain |
 | P1 | Migrate clusters created with overlapping Pod and LAN CIDRs | Preflight reports overlap and a rehearsed rebuild or migration runbook preserves required data |
-| P1 | Pin workload images by multi-architecture digest and hash Python artifacts | CI verifies digests, hashes, SBOM generation and supported ARM64 manifests |
+| P1 | Hash Python artifacts and generate a control-image SBOM | CI verifies hashes, vulnerability policy and a retained SBOM |
 | P2 | Remove the temporary `var-naming` lint exclusion | Shared variables are namespaced and the production lint profile passes without skips |
 | P2 | Replace SSH trust-on-first-use and passwordless sudo defaults | Host keys are provisioned from a trusted source and unattended privilege escalation uses a scoped secret |
 | P2 | Add scheduled hardware integration testing | A dedicated Raspberry Pi environment validates bootstrap, upgrade, reboot and rollback paths |

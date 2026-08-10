@@ -34,6 +34,7 @@ media_refresh=false
 media_dry_run=false
 upgrade_execution_mode_option=""
 upgrade_scope_option=""
+storage_hygiene_apply=false
 
 usage() {
   cat <<'EOF'
@@ -62,6 +63,8 @@ Performance:
 
 Maintenance:
   --status | --shutdown
+  --storage-hygiene [--apply-storage-cleanup]
+  --maintenance-audit
   --reconcile-node-hygiene
   --discover-cluster | --upgrade-plan | --upgrade-cluster
   --upgrade-latest-stable | --post-upgrade-reconcile
@@ -75,6 +78,7 @@ Recovery (experimental for the control plane):
 
 Quality:
   --validate                      Run the complete local pre-commit gate
+  --release-audit                 Compare the catalog with stable upstream releases
 
 Discovery options:
   --discovery-strategy MODE --discovery-cidr CIDR
@@ -90,7 +94,7 @@ Upgrade options:
   --os-patch-nodes | --no-os-patch-nodes
   --os-release-nodes | --no-os-release-nodes
   --enforce-replicas | --allow-single-replica | --allow-no-pdb
-  --disable-snapshots
+  --disable-snapshots | --disable-runtime-reconcile
 
 Recovery and media options:
   --node NAME --device /dev/diskN --recovery-bundle-id ID
@@ -346,6 +350,13 @@ while [[ "$#" -gt 0 ]]; do
       mark_operation
       validate_repo=true
       ;;
+    --release-audit)
+      mark_operation
+      if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+        docker_env_args+=(-e GITHUB_TOKEN)
+      fi
+      docker_cmd="python3 tools/release_catalog_audit.py"
+      ;;
     --list-removable-disks)
       mark_operation
       host_cmd="list-removable-disks"
@@ -426,6 +437,17 @@ while [[ "$#" -gt 0 ]]; do
     --reconcile-node-hygiene)
       mark_operation
       docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/26-reconcile-node-hygiene.yml"
+      ;;
+    --storage-hygiene)
+      mark_operation
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/30-storage-hygiene.yml"
+      ;;
+    --maintenance-audit)
+      mark_operation
+      docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/31-maintenance-audit.yml"
+      ;;
+    --apply-storage-cleanup)
+      storage_hygiene_apply=true
       ;;
     --discover-cluster)
       mark_operation
@@ -637,6 +659,9 @@ while [[ "$#" -gt 0 ]]; do
     --disable-snapshots)
       playbook_extra_args+=(-e "upgrade_capture_snapshots=false")
       ;;
+    --disable-runtime-reconcile)
+      playbook_extra_args+=(-e "upgrade_reconcile_runtime=false")
+      ;;
     *)
       user_args+=("$1")
       ;;
@@ -654,7 +679,8 @@ if (( operation_count == 0 )) && {
     [[ "${#playbook_extra_args[@]}" -gt 0 ]] ||
     [[ -n "${media_node}${media_device}${media_bundle_id}${media_image_url}${media_sha256sums_url}" ]] ||
     $media_refresh ||
-    $media_dry_run
+    $media_dry_run ||
+    $storage_hygiene_apply
 }; then
   error "Options were provided without an operation."
   exit 2
@@ -710,7 +736,16 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! docker info >/dev/null 2>&1; then
+docker_ready=false
+for _ in 1 2 3 4 5; do
+  if docker info >/dev/null 2>&1; then
+    docker_ready=true
+    break
+  fi
+  sleep 2
+done
+
+if ! $docker_ready; then
   error "Docker daemon is not running or you don't have permission to access it."
   exit 1
 fi
@@ -764,6 +799,10 @@ fi
 
 if [[ "${#docker_env_args[@]}" -gt 0 ]]; then
   docker_args+=("${docker_env_args[@]}")
+fi
+
+if $storage_hygiene_apply; then
+  playbook_extra_args+=(--extra-vars storage_hygiene_apply=true)
 fi
 
 if [[ -d "${REPO_ROOT}/workdir" ]]; then

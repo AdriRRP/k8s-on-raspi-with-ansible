@@ -12,7 +12,7 @@
   ansible.builtin.command:
     argv:
       - systemd-run
-      - "--unit=ansible-safe-reboot-{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '-') }}-{{ ansible_date_time.epoch }}"
+      - "--unit=ansible-safe-reboot-{{ inventory_hostname | regex_replace('[^A-Za-z0-9_.-]', '-') }}-{{ ansible_facts.date_time.epoch }}"
       - --description=Scheduled reboot requested by Ansible upgrade flow
       - --on-active=2s
       - /usr/bin/systemctl

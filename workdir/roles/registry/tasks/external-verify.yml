@@ -11,8 +11,12 @@
 
 - name: Wait for registry to be reachable at {{ registry_lb_ip }}
   ansible.builtin.uri:
-    url: "http://{{ registry_lb_ip }}:{{ registry_port }}/v2/"
+    url: "https://{{ registry_lb_ip }}:{{ registry_external_port }}/v2/"
     method: GET
+    url_username: "{{ registry_admin_username }}"
+    url_password: "{{ registry_admin_password }}"
+    force_basic_auth: true
+    ca_path: "{{ registry_ca_cert_path }}"
     return_content: true
     status_code: 200
   register: external_response
@@ -20,12 +24,8 @@
   delay: 5
   until: external_response.status == 200
   delegate_to: localhost
-
-- name: Verify response from external registry
-  ansible.builtin.fail:
-    msg: "Unexpected response from external registry at {{ registry_lb_ip }}"
-  when: "'{}' not in external_response.content"
+  no_log: true
 
 - name: Debug external registry test
   ansible.builtin.debug:
-    msg: "Registry reachable from control host at http://{{ registry_lb_ip }}:{{ registry_port }}/v2/"
+    msg: "Registry reachable with verified TLS at https://{{ registry_lb_ip }}:{{ registry_external_port }}/v2/"

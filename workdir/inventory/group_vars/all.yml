@@ -41,32 +41,35 @@ platform_release_catalog:
       "1.34": "1.35.7"
       "1.35": "1.36.3"
   runtime:
-    containerd_version: "2.3.1"
+    containerd_version: "2.3.3"
     containerd_checksums:
-      amd64: "628448bd973610c656c1cbea8e88b32fafd85b23cc1aa4a3372eb7198478c054"
-      arm64: "46a83603a850f3916ca7c942310daaf82ed17773a85b1d431e92d4a541e46d0d"
+      amd64: "ebf6e710056312628eaf6fb4a1c32f0a4ae5f812568321be4029389d66fc7c7c"
+      arm64: "9cc708f13c31588a2fbdbd13553d963356e990d50e9b95a2d6120f4ff2067910"
     containerd_service_checksum: "1941362cbaa89dd591b99c32b050d82c583d3cd2e5fa63085d7017457ec5fca8"
-    runc_version: "1.4.2"
+    runc_version: "1.5.1"
     runc_checksums:
-      amd64: "ac8a90f9e225bb9322189937b230cdc5478d5753f0e31e1bda98a5cf06bd9539"
-      arm64: "ea54032310588e115633aa2f4bba8bf9500257f657e1deca88df5778775138db"
+      amd64: "177df879d50c913eb205e898d5c1c05a18f574053c0ce5524c471208eaf06f6f"
+      arm64: "ca70e7dbd6616ca782a59b5d3ac86909123fdaa9fa3f89dcf29051c70eee7ce9"
     cni_plugins_version: "1.9.1"
     cni_plugins_checksums:
       amd64: "b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303"
       arm64: "56171987d3947707c3563db2f4001bccaf50fd63468611b9f3cbecb1375ee7ec"
-    pause_image: "registry.k8s.io/pause:3.10"
+    pause_image: "registry.k8s.io/pause:3.10.2"
   networking:
-    calico_version: "v3.32.0"
-    calico_tigera_checksum: "e48fe027f8be3d9136a012a32450f1eabc4c5257c0b76083cd1ab32316637d47"
+    calico_version: "v3.32.1"
+    calico_tigera_checksum: "f18e073794207d372606bc3ea6f8fd73972f86d6828f4ba666dfe0d4aa8ab07f"
     calico_custom_resources_checksum: "4fb598a7fce1ad1f8bbfb9004f5efcdb835082e92e06323cb7b8ce60260ed891"
     metallb_version: "v0.16.1"
     metallb_manifest_checksum: "bf25feebb7582ca7df845efd52ffbc2960d6cbf4cfc972f47fded9f788b67f0b"
     node_local_dns_image: >-
       registry.k8s.io/dns/k8s-dns-node-cache:1.26.8@sha256:bc6e64e2c85956af2fcc0aa720086410d41b4f31f378c9a92646fecc85cd4739
   observability:
-    prometheus_image: "prom/prometheus:v3.12.0"
-    grafana_image: "grafana/grafana:13.0.1-security-01"
-    node_exporter_image: "quay.io/prometheus/node-exporter:v1.11.1"
+    prometheus_image: >-
+      prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
+    grafana_image: >-
+      grafana/grafana:13.1.3@sha256:ab5cb380e3ff3172d6c8bd2e7cfd31cce977d2881b260e1f5bc089bf0b759b43
+    node_exporter_image: >-
+      quay.io/prometheus/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     metrics_server_images:
       "1.31": >-
         registry.k8s.io/metrics-server/metrics-server:v0.8.1@sha256:b2d2efaf5ac3b366ed0f839d2412a2c4279d4fc2a2a733f12c52133faed36c41
@@ -81,21 +84,28 @@ platform_release_catalog:
       "1.36": >-
         registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
     kube_state_metrics_images:
-      "1.31": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1"
-      "1.32": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.16.0"
-      "1.33": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.17.0"
-      "1.34": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0"
-      "1.35": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0"
-      "1.36": "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.0"
+      "1.31": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1@sha256:af8220f534938de121a694cb7314313a6195c9d494fc30bfa6885b08a276bb82
+      "1.32": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.16.0@sha256:e750cd4b43f782e3106537026c2995cac85d921aedea334e1d16caad7877c360
+      "1.33": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.17.0@sha256:2bbc915567334b13632bf62c0a97084aff72a36e13c4dabd5f2f11c898c5bacd
+      "1.34": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0@sha256:1545919b72e3ae035454fc054131e8d0f14b42ef6fc5b2ad5c751cafa6b2130e
+      "1.35": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1
+      "1.36": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1
   storage:
-    nfs_provisioner_image: "registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2"
-    registry_image: "registry:3.1.1"
+    nfs_provisioner_image: >-
+      registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2@sha256:63d5e04551ec8b5aae83b6f35938ca5ddc50a88d85492d9731810c31591fa4c9
+    registry_image: >-
+      ghcr.io/project-zot/zot:v2.1.20@sha256:542e25be4d32e7879c0cfad93492a93c81b1e059cbd2d30d485d4bd567318234
   validation:
-    smoke_test_image: "busybox:1.36.1"
-    dns_test_image: "registry.k8s.io/e2e-test-images/agnhost:2.39"
+    smoke_test_image: >-
+      busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
 
 platform_smoke_test_image: "{{ platform_release_catalog.validation.smoke_test_image }}"
-platform_dns_test_image: "{{ platform_release_catalog.validation.dns_test_image }}"
 
 kubeconfig_local_path: /home/ansible/.kube/config
 kubernetes_outputs: /home/ansible/.kube/outputs
@@ -129,12 +139,23 @@ grafana_admin_password_file: "{{ kubernetes_outputs }}/grafana-admin-password"
 grafana_admin_password: >-
   {{ lookup('ansible.builtin.password', grafana_admin_password_file ~ ' length=24 chars=ascii_letters,digits') }}
 
-registry_service_type: ClusterIP
-registry_expose_lb: false
+registry_service_type: LoadBalancer
+registry_expose_lb: true
 registry_persistence_enabled: true
 registry_storage_class_name: raspi-nfs-provisioner
 registry_pvc_size: 20Gi
-registry_lb_ip: ""
+registry_lb_ip: "192.168.0.240"
+registry_external_port: 443
+registry_tls_enabled: true
+registry_hostname: registry.home.arpa
+registry_admin_username: registry-admin
+registry_certificate_validity_days: 90
+registry_certificate_renewal_days: 30
+registry_pki_dir: "{{ kubernetes_outputs }}/registry-pki"
+registry_credentials_file: "{{ kubernetes_outputs }}/registry-credentials"
+registry_gc_delay: 6h
+registry_gc_interval: 24h
+registry_scrub_interval: 168h
 
 set_storageclass_default: true
 
@@ -221,6 +242,7 @@ upgrade_pre_snapshot_file: "{{ upgrade_snapshot_dir }}/{{ upgrade_run_id }}-pre.
 upgrade_post_snapshot_file: "{{ upgrade_snapshot_dir }}/{{ upgrade_run_id }}-post.json"
 upgrade_failure_dir: "{{ kubernetes_outputs }}/upgrade-failures/{{ upgrade_run_id }}"
 upgrade_reconcile_platform_addons: true
+upgrade_reconcile_runtime: true
 upgrade_enforce_replicated_workloads: true
 upgrade_require_pdb_protection: true
 upgrade_allow_single_replica_workloads: false

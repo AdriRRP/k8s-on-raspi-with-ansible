@@ -7,3 +7,10 @@ prometheus_service_type: ClusterIP
 prometheus_pvc_size: 10Gi
 prometheus_retention_time: 7d
 prometheus_runtime_node_name: ""
+registry_namespace: registry
+registry_name: registry
+registry_tls_enabled: true
+registry_metrics_username: prometheus
+registry_pki_dir: "{{ kubernetes_outputs }}/registry-pki"
+registry_ca_cert_path: "{{ registry_pki_dir }}/ca.crt"
+registry_metrics_password_path: "{{ registry_pki_dir }}/metrics-password"

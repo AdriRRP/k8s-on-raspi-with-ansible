@@ -3,14 +3,16 @@ kind: Service
 metadata:
   name: {{ registry_name }}
   namespace: {{ registry_namespace }}
+  labels:
+    app: {{ registry_name }}
 spec:
   type: {{ registry_service_type }}
   selector:
     app: {{ registry_name }}
   ports:
-    - name: http
-      port: {{ registry_port }}
-      targetPort: http
+    - name: {{ 'https' if registry_tls_enabled | bool else 'http' }}
+      port: {{ registry_external_port if registry_service_type == 'LoadBalancer' else registry_port }}
+      targetPort: registry
 {% if registry_service_type == "LoadBalancer" and registry_lb_ip | length > 0 %}
   loadBalancerIP: {{ registry_lb_ip }}
 {% endif %}

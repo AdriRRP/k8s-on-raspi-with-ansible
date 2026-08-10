@@ -111,10 +111,12 @@
         name: "{{ nfs_provisioner_name }}"
         namespace: "{{ nfs_namespace }}"
       spec:
-        replicas: 1
+        replicas: "{{ nfs_provisioner_replicas }}"
         strategy:
-          type: Recreate
-          rollingUpdate: null
+          type: RollingUpdate
+          rollingUpdate:
+            maxSurge: 1
+            maxUnavailable: 0
         selector:
           matchLabels:
             app: "{{ nfs_provisioner_name }}"
@@ -124,6 +126,13 @@
               app: "{{ nfs_provisioner_name }}"
           spec:
             serviceAccountName: "{{ nfs_provisioner_name }}"
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        app: "{{ nfs_provisioner_name }}"
+                    topologyKey: kubernetes.io/hostname
             securityContext:
               seccompProfile:
                 type: RuntimeDefault
@@ -138,6 +147,8 @@
                     value: "{{ nfs_server }}"
                   - name: NFS_PATH
                     value: "{{ nfs_path }}"
+                  - name: ENABLE_LEADER_ELECTION
+                    value: "true"
                 volumeMounts:
                   - name: nfs-volume
                     mountPath: /persistentvolumes
@@ -158,6 +169,23 @@
                 nfs:
                   server: "{{ nfs_server }}"
                   path: "{{ nfs_path }}"
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Protect NFS provisioner leader during voluntary disruptions
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: "{{ nfs_provisioner_name }}"
+        namespace: "{{ nfs_namespace }}"
+      spec:
+        minAvailable: 1
+        selector:
+          matchLabels:
+            app: "{{ nfs_provisioner_name }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
   delegate_to: localhost
 

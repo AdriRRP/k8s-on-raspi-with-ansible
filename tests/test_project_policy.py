@@ -56,6 +56,7 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn("--performance-profile", wrapper)
         self.assertIn("--node-local-dns", wrapper)
         self.assertIn("--reconcile-node-hygiene", wrapper)
+        self.assertIn("--release-audit", wrapper)
         self.assertIn("--help", wrapper)
         self.assertNotIn('--name "${SCRIPT_NAME}"', wrapper)
         self.assertNotIn("-b|--build", wrapper)
@@ -261,6 +262,27 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(len(action_references), 3)
         self.assertTrue(all(re.fullmatch(r"[a-f0-9]{40}", ref) for ref in action_references))
         self.assertIn("./tools/validate.sh", workflow)
+        self.assertIn("schedule:", workflow)
+        self.assertIn("release_catalog_audit.py", workflow)
+
+    def test_direct_workload_images_are_pinned_by_multiarch_digest(self):
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
+        direct_images = re.findall(
+            r"^\s+(?:prometheus|grafana|node_exporter|nfs_provisioner|registry|smoke_test)_image:"
+            r"\s*>-\n\s+(\S+)",
+            group_vars,
+            re.MULTILINE,
+        )
+
+        self.assertEqual(len(direct_images), 6)
+        self.assertTrue(
+            all(re.search(r":[^@\s]+@sha256:[a-f0-9]{64}$", image) for image in direct_images)
+        )
+        kube_state_metrics = re.findall(
+            r"kube-state-metrics:[^\s]+@sha256:[a-f0-9]{64}",
+            group_vars,
+        )
+        self.assertEqual(len(kube_state_metrics), 6)
 
     def test_all_ansible_yaml_documents_have_document_start(self):
         missing = []
@@ -282,7 +304,165 @@ class ProjectPolicyTests(unittest.TestCase):
 
         self.assertIn("upgrade_execution_mode: dry-run", group_vars)
         self.assertIn("upgrade_force_drain: false", group_vars)
+        self.assertIn("upgrade_reconcile_runtime: true", group_vars)
         self.assertIn('extra_vars.get("upgrade_execution_mode", "dry-run")', upgrade_tool)
+        self.assertIn("if not os_hops and not kubernetes_hops:", upgrade_tool)
+        self.assertIn('"upgrade_os_release_nodes": "false"', upgrade_tool)
+        self.assertIn('"upgrade_os_patch_nodes",', upgrade_tool)
+
+        for role in ("k8s_upgrade_control_plane", "k8s_upgrade_workers"):
+            tasks = (REPO_ROOT / "workdir" / "roles" / role / "tasks" / "main.yml").read_text()
+            self.assertIn("name: containerd", tasks)
+            self.assertIn("ansible.builtin.meta: flush_handlers", tasks)
+            self.assertIn("failed_when: expected_containerd_version not in", tasks)
+            self.assertIn("failed_when: expected_runc_version not in", tasks)
+
+    def test_runtime_reconciliation_supports_slow_pi_startup_and_legacy_registry(self):
+        grafana_defaults = (
+            REPO_ROOT / "workdir" / "roles" / "grafana" / "defaults" / "main.yml"
+        ).read_text()
+        addon_tasks = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_upgrade_addons" / "tasks" / "main.yml"
+        ).read_text()
+        grafana_config = (
+            REPO_ROOT
+            / "workdir"
+            / "roles"
+            / "grafana"
+            / "templates"
+            / "grafana-configmap-ini.yml.j2"
+        ).read_text()
+
+        self.assertIn("grafana_rollout_retries: 72", grafana_defaults)
+        self.assertIn("grafana_startup_probe_failure_threshold: 60", grafana_defaults)
+        self.assertIn("upgrade_registry_existing_namespace", addon_tasks)
+        self.assertIn('namespace: "{{ item }}"', addon_tasks)
+        self.assertIn('name: "{{ registry_name }}"', addon_tasks)
+        self.assertIn("check_for_updates = false", grafana_config)
+        self.assertIn("check_for_plugin_updates = false", grafana_config)
+        self.assertIn("preinstall_disabled = true", grafana_config)
+
+    def test_nfs_smoke_test_uses_delete_reclaim_policy(self):
+        verify_tasks = (
+            REPO_ROOT / "workdir" / "roles" / "nfs_provisioner" / "tasks" / "verify.yml"
+        ).read_text()
+
+        self.assertIn("nfs_test_storage_class_name", verify_tasks)
+        self.assertIn("reclaimPolicy: Delete", verify_tasks)
+        self.assertIn('archiveOnDelete: "false"', verify_tasks)
+        self.assertIn("Wait for ephemeral test volume deletion", verify_tasks)
+
+    def test_registry_is_lightweight_persistent_and_safely_migrated(self):
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
+        registry_root = REPO_ROOT / "workdir" / "roles" / "registry"
+        defaults = (registry_root / "defaults" / "main.yml").read_text()
+        main_tasks = (registry_root / "tasks" / "main.yml").read_text()
+        legacy_tasks = (registry_root / "tasks" / "legacy.yml").read_text()
+        deployment = (registry_root / "templates" / "registry-deployment.yml.j2").read_text()
+        config = (registry_root / "templates" / "registry-configmap.yml.j2").read_text()
+
+        self.assertIn("ghcr.io/project-zot/zot:v2.1.20@sha256:", group_vars)
+        self.assertIn("registry_allow_nonempty_legacy_migration: false", defaults)
+        self.assertIn("registry_allow_insecure_external_exposure: false", defaults)
+        self.assertIn("Refuse implicit migration of non-empty legacy registries", legacy_tasks)
+        self.assertLess(
+            main_tasks.index("Include registry verification tasks"),
+            main_tasks.index("Remove empty legacy registry"),
+        )
+        self.assertIn("runAsNonRoot: true", deployment)
+        self.assertIn("readOnlyRootFilesystem: true", deployment)
+        self.assertIn('"commit": true', config)
+        self.assertIn('"dedupe": false', config)
+        self.assertIn('"gc": true', config)
+        self.assertIn('"scrub"', config)
+        self.assertIn('"tls"', config)
+        self.assertIn('"htpasswd"', config)
+        self.assertIn('"accessControl"', config)
+        self.assertIn('"adminPolicy"', config)
+        self.assertNotIn('"search"', config)
+        self.assertNotIn('"ui"', config)
+        verify_tasks = (registry_root / "tasks" / "verify.yml").read_text()
+        self.assertIn("failed_when: wget_test.rc != 0", verify_tasks)
+        self.assertNotIn("--no-check-certificate", verify_tasks)
+        self.assertIn("Wait until previous registry test pod is absent", verify_tasks)
+        prometheus_tasks = (
+            REPO_ROOT / "workdir" / "roles" / "prometheus" / "tasks" / "main.yml"
+        ).read_text()
+        self.assertIn("Verify Prometheus is scraping Zot when installed", prometheus_tasks)
+        self.assertIn('up{job="zot-registry"}', prometheus_tasks)
+
+    def test_registry_external_access_is_tls_authenticated_and_trusted(self):
+        group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
+        registry_root = REPO_ROOT / "workdir" / "roles" / "registry"
+        pki_tasks = (registry_root / "tasks" / "pki.yml").read_text()
+        service = (registry_root / "templates" / "registry-service.yml.j2").read_text()
+        client_tasks = (
+            REPO_ROOT / "workdir" / "roles" / "registry_client" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertIn("registry_service_type: LoadBalancer", group_vars)
+        self.assertIn('registry_lb_ip: "192.168.0.240"', group_vars)
+        self.assertIn("registry_tls_enabled: true", group_vars)
+        self.assertIn("registry_certificate_renewal_days: 30", group_vars)
+        self.assertIn("htpasswd", pki_tasks)
+        self.assertIn("-cbB", pki_tasks)
+        self.assertIn("subjectAltName={{", pki_tasks)
+        self.assertIn("ca_path", (registry_root / "tasks" / "external-verify.yml").read_text())
+        self.assertNotIn(
+            "'{}' not in external_response.content",
+            (registry_root / "tasks" / "external-verify.yml").read_text(),
+        )
+        self.assertIn("registry_external_port", service)
+        self.assertIn(
+            "/etc/containerd/certs.d",
+            (
+                REPO_ROOT / "workdir" / "roles" / "registry_client" / "defaults" / "main.yml"
+            ).read_text(),
+        )
+        self.assertIn("Install registry CA", client_tasks)
+
+    def test_storage_hygiene_is_allowlisted_and_opt_in(self):
+        defaults = (
+            REPO_ROOT / "workdir" / "roles" / "storage_hygiene" / "defaults" / "main.yml"
+        ).read_text()
+        tasks = (
+            REPO_ROOT / "workdir" / "roles" / "storage_hygiene" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertIn("storage_hygiene_apply: false", defaults)
+        self.assertIn("storage_hygiene_retired_claims:", defaults)
+        self.assertIn("item.status.phase | default('') == 'Released'", tasks)
+        self.assertIn("Archive retired PV metadata", tasks)
+        self.assertIn("previous non-empty forensic report was preserved", tasks)
+        self.assertGreaterEqual(tasks.count("when: storage_hygiene_apply | bool"), 2)
+
+    def test_lightweight_availability_and_maintenance_gates(self):
+        metrics_defaults = (
+            REPO_ROOT / "workdir" / "roles" / "metrics_server" / "defaults" / "main.yml"
+        ).read_text()
+        metrics_manifest = (
+            REPO_ROOT
+            / "workdir"
+            / "roles"
+            / "metrics_server"
+            / "templates"
+            / "metrics-server.yml.j2"
+        ).read_text()
+        nfs_tasks = (
+            REPO_ROOT / "workdir" / "roles" / "nfs_provisioner" / "tasks" / "create.yml"
+        ).read_text()
+        maintenance = (
+            REPO_ROOT / "workdir" / "roles" / "maintenance_audit" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertIn("metrics_server_replicas: 2", metrics_defaults)
+        self.assertIn("kind: PodDisruptionBudget", metrics_manifest)
+        self.assertIn("requiredDuringSchedulingIgnoredDuringExecution", metrics_manifest)
+        self.assertIn("ENABLE_LEADER_ELECTION", nfs_tasks)
+        self.assertIn("nfs_provisioner_replicas", nfs_tasks)
+        self.assertIn("apt-get", maintenance)
+        self.assertIn("/var/run/reboot-required", maintenance)
+        self.assertIn("/proc/pressure/io", maintenance)
 
     def test_runtime_artifacts_are_versioned_and_checksum_verified(self):
         defaults = (
@@ -295,6 +475,29 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn("containerd_checksums[arch]", tasks)
         self.assertIn("runc_checksums[arch]", tasks)
         self.assertIn("cni_plugins_checksums[arch]", tasks)
+
+    def test_upgrade_reconciliation_detects_namespaced_registry(self):
+        tasks = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_upgrade_addons" / "tasks" / "main.yml"
+        ).read_text()
+        defaults = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_upgrade_addons" / "defaults" / "main.yml"
+        ).read_text()
+
+        self.assertIn('namespace: "{{ item }}"', tasks)
+        self.assertIn('name: "{{ registry_name }}"', tasks)
+        self.assertIn("registry_legacy_namespaces", tasks)
+        self.assertIn("upgrade_registry_deployments", tasks)
+        self.assertIn("- kube-system", defaults)
+
+    def test_upgrade_snapshot_path_is_frozen_before_capture_and_read(self):
+        tasks = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_upgrade_snapshot" / "tasks" / "main.yml"
+        ).read_text()
+
+        self.assertIn("k8s_upgrade_snapshot_target_file_resolved", tasks)
+        self.assertIn("Verify captured snapshot exists", tasks)
+        self.assertNotIn('src: "{{ k8s_upgrade_snapshot_target_file }}"', tasks)
 
 
 if __name__ == "__main__":
