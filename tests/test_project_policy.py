@@ -256,14 +256,35 @@ class ProjectPolicyTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
 
     def test_ci_actions_are_pinned_to_full_commit_shas(self):
-        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
-        action_references = re.findall(r"uses:\s+[^@\s]+@([^\s]+)", workflow)
+        workflows = "\n".join(
+            path.read_text() for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml")
+        )
+        action_references = re.findall(r"uses:\s+[^@\s]+@([^\s]+)", workflows)
 
-        self.assertGreaterEqual(len(action_references), 3)
+        self.assertGreaterEqual(len(action_references), 7)
         self.assertTrue(all(re.fullmatch(r"[a-f0-9]{40}", ref) for ref in action_references))
+
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
         self.assertIn("./tools/validate.sh", workflow)
         self.assertIn("schedule:", workflow)
         self.assertIn("release_catalog_audit.py", workflow)
+
+    def test_ci_validates_native_arm64_and_scans_the_control_image(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+        self.assertIn("ubuntu-24.04-arm", workflow)
+        self.assertIn("anchore/sbom-action@", workflow)
+        self.assertIn("anchore/scan-action@", workflow)
+        self.assertIn("severity-cutoff: critical", workflow)
+        self.assertIn("only-fixed: true", workflow)
+
+    def test_codeql_scans_python_with_minimal_permissions(self):
+        workflow = (REPO_ROOT / ".github" / "workflows" / "codeql.yml").read_text()
+
+        self.assertIn("contents: read", workflow)
+        self.assertIn("security-events: write", workflow)
+        self.assertIn("languages: python", workflow)
+        self.assertNotIn("contents: write", workflow)
 
     def test_direct_workload_images_are_pinned_by_multiarch_digest(self):
         group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()
@@ -282,7 +303,7 @@ class ProjectPolicyTests(unittest.TestCase):
             r"kube-state-metrics:[^\s]+@sha256:[a-f0-9]{64}",
             group_vars,
         )
-        self.assertEqual(len(kube_state_metrics), 6)
+        self.assertEqual(len(kube_state_metrics), 7)
 
     def test_all_ansible_yaml_documents_have_document_start(self):
         missing = []

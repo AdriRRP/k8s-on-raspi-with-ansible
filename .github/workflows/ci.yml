@@ -19,9 +19,18 @@ concurrency:
 
 jobs:
   validate:
-    name: Validate Ansible and Control Image
-    runs-on: ubuntu-24.04
+    name: Validate Ansible and Control Image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Check out repository
@@ -38,8 +47,8 @@ jobs:
           context: .
           load: true
           tags: ansible-k8s-raspberry-audit:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=control-image-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=control-image-${{ matrix.arch }}
 
       - name: Check cluster-control shell syntax
         run: bash -n cluster-control.sh
@@ -56,8 +65,28 @@ jobs:
           ansible-k8s-raspberry-audit:ci
           ./tools/validate.sh
 
+      - name: Generate control-image SBOM
+        if: matrix.arch == 'amd64'
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
+        with:
+          artifact-name: control-image-sbom.spdx.json
+          image: ansible-k8s-raspberry-audit:ci
+          upload-artifact-retention: 14
+          upload-release-assets: false
+
+      - name: Scan control image for fixable vulnerabilities
+        if: matrix.arch == 'amd64'
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439  # v7.4.2
+        with:
+          cache-db: true
+          fail-build: true
+          image: ansible-k8s-raspberry-audit:ci
+          only-fixed: true
+          output-format: table
+          severity-cutoff: critical
+
       - name: Audit stable upstream releases
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' && matrix.arch == 'amd64'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >

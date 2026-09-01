@@ -7,12 +7,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-ARG KUBECTL_VERSION=v1.36.3
-ARG ARCH_NAME
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    apache2-utils \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    openssh-client \
+    openssl \
+    python3 \
+    python3-pip \
+    python3-venv \
+    shellcheck \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY workdir/requirements.yml /tmp/ansible-requirements.yml
-COPY workdir/requirements-control.txt /tmp/requirements-control.txt
-COPY workdir/requirements-control-lock.txt /tmp/requirements-control-lock.txt
+ARG KUBECTL_VERSION=v1.37.0
+ARG ARCH_NAME
 
 RUN if [ -z "$ARCH_NAME" ]; then \
       ARCH_RAW="$(uname -m)" && \
@@ -29,26 +39,16 @@ RUN if [ -z "$ARCH_NAME" ]; then \
       esac; \
     fi
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    apache2-utils \
-    bash \
-    ca-certificates \
-    curl \
-    git \
-    openssh-client \
-    openssl \
-    python3 \
-    python3-pip \
-    python3-venv \
-    shellcheck \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN . /tmp/arch_env && \
     curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_DL}/kubectl" && \
     curl -fsSLo /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH_DL}/kubectl.sha256" && \
     echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum --check --strict && \
     rm -f /tmp/kubectl.sha256 /tmp/arch_env && \
     chmod 0755 /usr/local/bin/kubectl
+
+COPY workdir/requirements.yml /tmp/ansible-requirements.yml
+COPY workdir/requirements-control.txt /tmp/requirements-control.txt
+COPY workdir/requirements-control-lock.txt /tmp/requirements-control-lock.txt
 
 RUN python3 -m venv /opt/ansible-venv && \
     pip install --no-cache-dir --requirement /tmp/requirements-control-lock.txt && \

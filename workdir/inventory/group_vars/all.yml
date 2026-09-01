@@ -28,23 +28,25 @@ platform_release_catalog:
         recover_ssh_via_kubernetes_after_reboot: true
         ssh_timeout_before_k8s_recovery: 300
   kubernetes:
-    install_version: "1.36.3"
-    latest_upstream_version: "1.36.3"
+    install_version: "1.37.0"
+    latest_upstream_version: "1.37.0"
     deb_revision: "1.1"
     deb_revisions_by_version:
       "1.36.2": "2.1"
       "1.36.3": "1.1"
+      "1.37.0": "1.1"
     supported_upgrade_targets:
       "1.31": "1.32.13"
       "1.32": "1.33.13"
       "1.33": "1.34.10"
       "1.34": "1.35.7"
       "1.35": "1.36.3"
+      "1.36": "1.37.0"
   runtime:
-    containerd_version: "2.3.3"
+    containerd_version: "2.3.4"
     containerd_checksums:
-      amd64: "ebf6e710056312628eaf6fb4a1c32f0a4ae5f812568321be4029389d66fc7c7c"
-      arm64: "9cc708f13c31588a2fbdbd13553d963356e990d50e9b95a2d6120f4ff2067910"
+      amd64: "9d68969855fbf676cdb8ed758e420fb048d61f984f61de3e53eddfebe484d168"
+      arm64: "a985fbb7e18fc0362d31a055338f5d7b0e087a3e27f14c70d1c5965399a29f95"
     containerd_service_checksum: "1941362cbaa89dd591b99c32b050d82c583d3cd2e5fa63085d7017457ec5fca8"
     runc_version: "1.5.1"
     runc_checksums:
@@ -56,8 +58,8 @@ platform_release_catalog:
       arm64: "56171987d3947707c3563db2f4001bccaf50fd63468611b9f3cbecb1375ee7ec"
     pause_image: "registry.k8s.io/pause:3.10.2"
   networking:
-    calico_version: "v3.32.1"
-    calico_tigera_checksum: "f18e073794207d372606bc3ea6f8fd73972f86d6828f4ba666dfe0d4aa8ab07f"
+    calico_version: "v3.32.2"
+    calico_tigera_checksum: "4e372754e4e1c3a61cf7c0ceb9bc9fff2f78aa6575dcadcb5ea4e716bb00dffa"
     calico_custom_resources_checksum: "4fb598a7fce1ad1f8bbfb9004f5efcdb835082e92e06323cb7b8ce60260ed891"
     metallb_version: "v0.16.1"
     metallb_manifest_checksum: "bf25feebb7582ca7df845efd52ffbc2960d6cbf4cfc972f47fded9f788b67f0b"
@@ -65,9 +67,9 @@ platform_release_catalog:
       registry.k8s.io/dns/k8s-dns-node-cache:1.26.8@sha256:bc6e64e2c85956af2fcc0aa720086410d41b4f31f378c9a92646fecc85cd4739
   observability:
     prometheus_image: >-
-      prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
+      prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
     grafana_image: >-
-      grafana/grafana:13.1.3@sha256:ab5cb380e3ff3172d6c8bd2e7cfd31cce977d2881b260e1f5bc089bf0b759b43
+      grafana/grafana:13.2.0@sha256:3fd54ae1214669f8355f065ec9f6445d5279a3d77095ab048ca045685272429b
     node_exporter_image: >-
       quay.io/prometheus/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     metrics_server_images:
@@ -83,6 +85,8 @@ platform_release_catalog:
         registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
       "1.36": >-
         registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
+      "1.37": >-
+        registry.k8s.io/metrics-server/metrics-server:v0.9.0@sha256:d9862115e7c7881280d3d75ca26bda8ffc0fc213315979575bf23ce9826205c0
     kube_state_metrics_images:
       "1.31": >-
         registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.1@sha256:af8220f534938de121a694cb7314313a6195c9d494fc30bfa6885b08a276bb82
@@ -96,6 +100,8 @@ platform_release_catalog:
         registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1
       "1.36": >-
         registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1@sha256:85108987d044b18a098126732f98602df408888c0f7d456241f5abefb9744bc1
+      "1.37": >-
+        registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0@sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b
   storage:
     nfs_provisioner_image: >-
       registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2@sha256:63d5e04551ec8b5aae83b6f35938ca5ddc50a88d85492d9731810c31591fa4c9

@@ -68,6 +68,20 @@ class ResolveResumableKubernetesHopsTests(unittest.TestCase):
 
         self.assertEqual(hops, ["1.36.3"])
 
+    def test_routes_current_catalog_release_to_kubernetes_137(self):
+        mapping = {
+            "1.35": "1.36.3",
+            "1.36": "1.37.0",
+        }
+
+        hops = upgrade_to_latest_stable.resolve_resumable_kubernetes_hops(
+            ["1.35.7", "1.36.3"],
+            "1.37.0",
+            mapping,
+        )
+
+        self.assertEqual(hops, ["1.36.3", "1.37.0"])
+
     def test_detects_cycles_in_kubernetes_route(self):
         mapping = {
             "1.32": "1.33.13",

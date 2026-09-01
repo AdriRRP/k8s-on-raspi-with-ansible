@@ -218,7 +218,7 @@ The control image's default `kubectl` version mirrors the catalog and may be
 overridden for a staged operation:
 
 ```bash
-KUBECTL_VERSION=v1.36.3 ./cluster-control.sh --build
+KUBECTL_VERSION=v1.37.0 ./cluster-control.sh --build
 ```
 
 Workload images are pinned by multi-architecture digest where the deployment is
@@ -250,7 +250,7 @@ Always create and inspect a plan first:
 
 ```bash
 ./cluster-control.sh --upgrade-plan \
-  --target-version 1.36.3 \
+  --target-version 1.37.0 \
   --target-os-version 26.04
 ```
 
@@ -276,7 +276,7 @@ For separate maintenance windows:
 
 ./cluster-control.sh --upgrade-cluster \
   --kubernetes-only \
-  --target-version 1.36.3 \
+  --target-version 1.37.0 \
   --apply-upgrade
 ```
 
@@ -484,9 +484,10 @@ Build and validate against a clean toolchain in one invocation:
 ```
 
 The CI workflow uses read-only permissions, immutable action SHAs and the same
-pinned control image. Dependabot checks Actions, Docker and Python dependencies
-weekly; a scheduled read-only job detects stale platform releases, which still
-require an explicit validation change.
+pinned control image on native AMD64 and ARM64 runners. It retains an SPDX SBOM
+and blocks fixable critical vulnerabilities. CodeQL, Dependabot, secret scanning
+and push protection cover the repository; a scheduled read-only job detects
+stale platform releases, which still require an explicit validation change.
 
 ## Repository layout
 
@@ -524,7 +525,7 @@ require an explicit validation change.
 | P1 | Remove the NFS single point of failure | Storage survives loss of one node or disk and workloads recover within a documented objective |
 | P1 | Make stateful platform services genuinely HA | Zot, Prometheus and Grafana use independent replicated storage rather than multiple Pods sharing the same NFS failure domain |
 | P1 | Migrate clusters created with overlapping Pod and LAN CIDRs | Preflight reports overlap and a rehearsed rebuild or migration runbook preserves required data |
-| P1 | Hash Python artifacts and generate a control-image SBOM | CI verifies hashes, vulnerability policy and a retained SBOM |
+| P1 | Hash every Python artifact and tighten the image vulnerability gate from critical to high | CI verifies hashes and upstream Kubernetes ships a kubectl build without actionable high-severity findings |
 | P2 | Remove the temporary `var-naming` lint exclusion | Shared variables are namespaced and the production lint profile passes without skips |
 | P2 | Replace SSH trust-on-first-use and passwordless sudo defaults | Host keys are provisioned from a trusted source and unattended privilege escalation uses a scoped secret |
 | P2 | Add scheduled hardware integration testing | A dedicated Raspberry Pi environment validates bootstrap, upgrade, reboot and rollback paths |
