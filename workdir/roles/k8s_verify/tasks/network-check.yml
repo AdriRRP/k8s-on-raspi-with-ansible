@@ -58,8 +58,8 @@
           - --output=jsonpath={.status.numberReady}
           - "--kubeconfig={{ kubeconfig_local_path }}"
       register: ready_pods
-      retries: 20
-      delay: 5
+      retries: "{{ ((verify_timeout | int) / (verify_interval | int)) | round(0, 'ceil') | int }}"
+      delay: "{{ verify_interval }}"
       until: ready_pods.stdout | int == expected_pods.stdout_lines | length
       changed_when: false
       delegate_to: localhost
