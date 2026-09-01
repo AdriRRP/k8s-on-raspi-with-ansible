@@ -201,10 +201,18 @@ class ProjectPolicyTests(unittest.TestCase):
         network_check = (
             REPO_ROOT / "workdir" / "roles" / "k8s_verify" / "tasks" / "network-check.yml"
         ).read_text()
+        defaults = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_verify" / "defaults" / "main.yml"
+        ).read_text()
 
         self.assertNotIn("jq ", network_check)
         self.assertNotIn("json_query", network_check)
         self.assertIn("jsonpath={.status.numberReady}", network_check)
+        self.assertIn("verify_timeout: 300", defaults)
+        self.assertIn("verify_interval: 10", defaults)
+        self.assertIn('retries: "{{ ((verify_timeout | int)', network_check)
+        self.assertIn('delay: "{{ verify_interval }}"', network_check)
+        self.assertNotIn("retries: 20", network_check)
 
     def test_upgrade_roles_drop_become_when_delegating_to_control_host(self):
         for role in ("k8s_upgrade_control_plane", "k8s_upgrade_workers"):
