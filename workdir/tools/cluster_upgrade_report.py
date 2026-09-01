@@ -87,8 +87,9 @@ def extract_node_summary(node):
 
     roles = []
     for key in labels:
-        if key.startswith("node-role.kubernetes.io/"):
-            role_name = key.split("/", 1)[1] or "control-plane"
+        label_domain, separator, role_name = key.partition("/")
+        if separator and label_domain == "node-role.kubernetes.io":
+            role_name = role_name or "control-plane"
             roles.append(role_name)
 
     ready = False
