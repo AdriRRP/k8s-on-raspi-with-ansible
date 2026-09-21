@@ -26,10 +26,16 @@ class ReleaseCheck:
     repository: str
     release_tag_pattern: str = r"^v?\d+\.\d+\.\d+$"
     use_tags: bool = False
+    track_current_minor: bool = False
 
 
 RELEASE_CHECKS = (
-    ReleaseCheck("containerd", ("runtime", "containerd_version"), "containerd/containerd"),
+    ReleaseCheck(
+        "containerd",
+        ("runtime", "containerd_version"),
+        "containerd/containerd",
+        track_current_minor=True,
+    ),
     ReleaseCheck("runc", ("runtime", "runc_version"), "opencontainers/runc"),
     ReleaseCheck("CNI plugins", ("runtime", "cni_plugins_version"), "containernetworking/plugins"),
     ReleaseCheck("Calico", ("networking", "calico_version"), "projectcalico/calico"),
@@ -79,16 +85,29 @@ def request(url: str, timeout: float) -> bytes:
         return response.read()
 
 
-def latest_github_release(repository: str, pattern: str, timeout: float) -> str:
+def latest_github_release(
+    repository: str,
+    pattern: str,
+    timeout: float,
+    release_line: tuple[int, int] | None = None,
+) -> str:
     releases = json.loads(request(f"{GITHUB_API}/repos/{repository}/releases?per_page=30", timeout))
     matcher = re.compile(pattern)
     tags = []
     for release in releases:
         tag = str(release.get("tag_name", ""))
-        if not release.get("draft") and not release.get("prerelease") and matcher.fullmatch(tag):
+        if (
+            not release.get("draft")
+            and not release.get("prerelease")
+            and matcher.fullmatch(tag)
+            and (release_line is None or semantic_version(tag)[:2] == release_line)
+        ):
             tags.append(tag)
     if not tags:
-        raise RuntimeError(f"No stable semantic release found for {repository}")
+        suffix = ""
+        if release_line is not None:
+            suffix = f" in release line {release_line[0]}.{release_line[1]}"
+        raise RuntimeError(f"No stable semantic release found for {repository}{suffix}")
     return max(tags, key=semantic_version)
 
 
@@ -99,12 +118,25 @@ def semantic_version(tag: str) -> tuple[int, int, int]:
     return tuple(int(component) for component in match.groups())
 
 
-def latest_github_tag(repository: str, pattern: str, timeout: float) -> str:
+def latest_github_tag(
+    repository: str,
+    pattern: str,
+    timeout: float,
+    release_line: tuple[int, int] | None = None,
+) -> str:
     tags = json.loads(request(f"{GITHUB_API}/repos/{repository}/tags?per_page=100", timeout))
     matcher = re.compile(pattern)
-    stable_tags = [str(tag["name"]) for tag in tags if matcher.fullmatch(str(tag["name"]))]
+    stable_tags = [
+        str(tag["name"])
+        for tag in tags
+        if matcher.fullmatch(str(tag["name"]))
+        and (release_line is None or semantic_version(str(tag["name"]))[:2] == release_line)
+    ]
     if not stable_tags:
-        raise RuntimeError(f"No stable semantic tag found for {repository}")
+        suffix = ""
+        if release_line is not None:
+            suffix = f" in release line {release_line[0]}.{release_line[1]}"
+        raise RuntimeError(f"No stable semantic tag found for {repository}{suffix}")
     return max(stable_tags, key=semantic_version)
 
 
@@ -132,7 +164,10 @@ def audit(catalog: dict[str, Any], timeout: float) -> list[tuple[str, str, str]]
     for check in RELEASE_CHECKS:
         expected = normalize_version(expected_value(catalog, check))
         latest = latest_github_tag if check.use_tags else latest_github_release
-        actual = normalize_version(latest(check.repository, check.release_tag_pattern, timeout))
+        release_line = semantic_version(expected)[:2] if check.track_current_minor else None
+        actual = normalize_version(
+            latest(check.repository, check.release_tag_pattern, timeout, release_line)
+        )
         if expected != actual:
             stale.append((check.name, expected, actual))
     return stale
