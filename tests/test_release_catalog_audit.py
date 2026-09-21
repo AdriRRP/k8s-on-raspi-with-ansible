@@ -45,6 +45,23 @@ class ReleaseCatalogAuditTests(unittest.TestCase):
 
         self.assertEqual(actual, "v1.10.0")
 
+    def test_latest_release_can_follow_the_current_minor_release_line(self):
+        releases = [
+            {"tag_name": "v2.3.5", "draft": False, "prerelease": False},
+            {"tag_name": "v2.3.6", "draft": False, "prerelease": False},
+            {"tag_name": "v2.4.0", "draft": False, "prerelease": False},
+        ]
+        with patch.object(
+            release_catalog_audit,
+            "request",
+            return_value=release_catalog_audit.json.dumps(releases).encode(),
+        ):
+            actual = release_catalog_audit.latest_github_release(
+                "owner/repo", r"^v?\d+\.\d+\.\d+$", 1.0, release_line=(2, 3)
+            )
+
+        self.assertEqual(actual, "v2.3.6")
+
     def test_latest_tag_supports_projects_with_chart_only_releases(self):
         tags = [{"name": "v0.16.0"}, {"name": "v0.16.1"}, {"name": "chart-0.17.0"}]
         with patch.object(

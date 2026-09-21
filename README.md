@@ -214,6 +214,10 @@ Fresh installs use the version validated by the repository. Existing clusters
 move through every supported Ubuntu release and every Kubernetes minor; minor
 versions are never skipped.
 
+The release audit follows the currently validated containerd minor series so
+the cluster remains on an LTS line. Moving to a newer non-LTS series is an
+explicit compatibility decision rather than an automatic freshness update.
+
 The control image's default `kubectl` version mirrors the catalog and may be
 overridden for a staged operation:
 
