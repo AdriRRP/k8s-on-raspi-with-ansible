@@ -28,38 +28,39 @@ platform_release_catalog:
         recover_ssh_via_kubernetes_after_reboot: true
         ssh_timeout_before_k8s_recovery: 300
   kubernetes:
-    install_version: "1.37.0"
-    latest_upstream_version: "1.37.0"
+    install_version: "1.37.1"
+    latest_upstream_version: "1.37.1"
     deb_revision: "1.1"
     deb_revisions_by_version:
       "1.36.2": "2.1"
       "1.36.3": "1.1"
       "1.37.0": "1.1"
+      "1.37.1": "1.1"
     supported_upgrade_targets:
       "1.31": "1.32.13"
       "1.32": "1.33.13"
       "1.33": "1.34.10"
       "1.34": "1.35.7"
       "1.35": "1.36.3"
-      "1.36": "1.37.0"
+      "1.36": "1.37.1"
   runtime:
-    containerd_version: "2.3.5"
+    containerd_version: "2.3.7"
     containerd_checksums:
-      amd64: "2f0a095a71e3262d0d91ff0e50e2e4ae73c3866c4d1ff6a15f341097fba3dd44"
-      arm64: "06f46cbc073872c5ad1fbc922a53543e9a26b798d62ff106d44639dcb9947942"
+      amd64: "09a1b669ac6d21e7e24c3c33a9805b48987ba5845e8d88f039c47013a0c0025c"
+      arm64: "e08530c6c8a23c612606da5d2832aed9bed8fc7f8c1b41df0f148a701b931d69"
     containerd_service_checksum: "1941362cbaa89dd591b99c32b050d82c583d3cd2e5fa63085d7017457ec5fca8"
-    runc_version: "1.5.1"
+    runc_version: "1.5.2"
     runc_checksums:
-      amd64: "177df879d50c913eb205e898d5c1c05a18f574053c0ce5524c471208eaf06f6f"
-      arm64: "ca70e7dbd6616ca782a59b5d3ac86909123fdaa9fa3f89dcf29051c70eee7ce9"
+      amd64: "599f6f94ff8c5057241eff0d54c3c74f95c34935b6457b33fe545defc61e9488"
+      arm64: "d10ecae898361832a059be2089bab92d158aec54661b18ed7346ed79628b46b0"
     cni_plugins_version: "1.9.1"
     cni_plugins_checksums:
       amd64: "b98f74a0f8522f0a83867178729c1aa70f2158f90c45a2ca8fa791db1c76b303"
       arm64: "56171987d3947707c3563db2f4001bccaf50fd63468611b9f3cbecb1375ee7ec"
     pause_image: "registry.k8s.io/pause:3.10.2"
   networking:
-    calico_version: "v3.32.2"
-    calico_tigera_checksum: "4e372754e4e1c3a61cf7c0ceb9bc9fff2f78aa6575dcadcb5ea4e716bb00dffa"
+    calico_version: "v3.33.0"
+    calico_tigera_checksum: "aef423b36aef8cf86567f92bbe5eea4b4ca105a6fc7dbf43de599c6fa70388ba"
     calico_custom_resources_checksum: "4fb598a7fce1ad1f8bbfb9004f5efcdb835082e92e06323cb7b8ce60260ed891"
     metallb_version: "v0.16.1"
     metallb_manifest_checksum: "bf25feebb7582ca7df845efd52ffbc2960d6cbf4cfc972f47fded9f788b67f0b"
@@ -67,9 +68,9 @@ platform_release_catalog:
       registry.k8s.io/dns/k8s-dns-node-cache:1.26.8@sha256:bc6e64e2c85956af2fcc0aa720086410d41b4f31f378c9a92646fecc85cd4739
   observability:
     prometheus_image: >-
-      prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+      prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     grafana_image: >-
-      grafana/grafana:13.2.2@sha256:ac461fb352abc50da10a51c7d02462e9c05488f11f53f14b3ad79a8145f638a0
+      grafana/grafana:13.2.4@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
     node_exporter_image: >-
       quay.io/prometheus/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     metrics_server_images:
@@ -106,7 +107,7 @@ platform_release_catalog:
     nfs_provisioner_image: >-
       registry.k8s.io/sig-storage/nfs-subdir-external-provisioner:v4.0.2@sha256:63d5e04551ec8b5aae83b6f35938ca5ddc50a88d85492d9731810c31591fa4c9
     registry_image: >-
-      ghcr.io/project-zot/zot:v2.1.21@sha256:6b69512c00dceaad05b1144e6079aac6aa7309d7fd200f9947ecb1de09cf48c8
+      ghcr.io/project-zot/zot:v2.1.22@sha256:96cda11459ce6f8c60da3b03f03e9f67fd11b3ae2d82c4c04c92b3c608996080
   validation:
     smoke_test_image: >-
       busybox:1.37.0@sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0

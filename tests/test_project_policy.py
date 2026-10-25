@@ -2,6 +2,10 @@ import pathlib
 import re
 import subprocess
 import unittest
+from importlib import metadata
+
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -31,6 +35,18 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIsNotNone(base_image)
         self.assertIsNotNone(install_version)
         self.assertEqual(base_image.group(1), install_version.group(1))
+        kubectl_version = re.search(
+            r"^ARG KUBECTL_VERSION=v(\d+\.\d+\.\d+)$", dockerfile, re.MULTILINE
+        )
+        kubernetes_catalog = group_vars.split("  kubernetes:\n", 1)[1].split("  runtime:\n", 1)[0]
+        kubernetes_version = re.search(
+            r'^    install_version: "(\d+\.\d+\.\d+)"$',
+            kubernetes_catalog,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(kubectl_version)
+        self.assertIsNotNone(kubernetes_version)
+        self.assertEqual(kubectl_version.group(1), kubernetes_version.group(1))
         self.assertIn("kubectl.sha256", dockerfile)
         self.assertIn("sha256sum --check --strict", dockerfile)
         self.assertIn("ansible-core==", requirements)
@@ -45,6 +61,38 @@ class ProjectPolicyTests(unittest.TestCase):
         }
         self.assertTrue(direct_requirements.issubset(set(lock.splitlines())))
         self.assertNotIn("NOPASSWD", dockerfile)
+
+    def test_control_lock_contains_every_runtime_dependency(self):
+        lock = (REPO_ROOT / "workdir" / "requirements-control-lock.txt").read_text()
+        locked_names = {
+            canonicalize_name(line.split("==", 1)[0])
+            for line in lock.splitlines()
+            if line and not line.startswith("#")
+        }
+
+        for package_name in locked_names:
+            distribution = metadata.distribution(package_name)
+            for requirement_text in distribution.requires or ():
+                requirement = Requirement(requirement_text)
+                if requirement.marker is None or requirement.marker.evaluate():
+                    self.assertIn(
+                        canonicalize_name(requirement.name),
+                        locked_names,
+                        f"{package_name} dependency is not pinned: {requirement}",
+                    )
+
+    def test_vulnerability_exception_is_scoped_to_upstream_kubectl_binary(self):
+        dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        grype_config = (REPO_ROOT / ".grype.yaml").read_text()
+
+        self.assertIn("rm -f /usr/bin/pebble", dockerfile)
+        self.assertIn("config: .grype.yaml", workflow)
+        self.assertEqual(grype_config.count("vulnerability: GO-2026-6612"), 2)
+        self.assertEqual(grype_config.count("location: /usr/local/bin/kubectl"), 2)
+        self.assertIn("version: go1.26.8", grype_config)
+        self.assertIn("version: v0.57.0", grype_config)
+        self.assertNotIn("location: /usr/bin/pebble", grype_config)
 
     def test_shell_wrapper_is_location_independent_and_parallel_safe(self):
         wrapper = (REPO_ROOT / "cluster-control.sh").read_text()
@@ -391,7 +439,7 @@ class ProjectPolicyTests(unittest.TestCase):
         deployment = (registry_root / "templates" / "registry-deployment.yml.j2").read_text()
         config = (registry_root / "templates" / "registry-configmap.yml.j2").read_text()
 
-        self.assertIn("ghcr.io/project-zot/zot:v2.1.21@sha256:", group_vars)
+        self.assertIn("ghcr.io/project-zot/zot:v2.1.22@sha256:", group_vars)
         self.assertIn("registry_allow_nonempty_legacy_migration: false", defaults)
         self.assertIn("registry_allow_insecure_external_exposure: false", defaults)
         self.assertIn("Refuse implicit migration of non-empty legacy registries", legacy_tasks)
