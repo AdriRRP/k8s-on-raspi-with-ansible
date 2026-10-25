@@ -90,6 +90,22 @@
     namespace: default
     name: dnsutils
     kubeconfig: "{{ kubeconfig_local_path }}"
+    delete_options:
+      gracePeriodSeconds: 0
+  delegate_to: localhost
+
+- name: Wait until the dnsutils pod is absent
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: default
+    name: dnsutils
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: dnsutils_cleanup
+  retries: 30
+  delay: 2
+  until: dnsutils_cleanup.resources | length == 0
+  changed_when: false
   delegate_to: localhost
 
 - name: Deploy dnsutils pod for DNS checks
@@ -157,6 +173,8 @@
     namespace: default
     name: dnsutils
     kubeconfig: "{{ kubeconfig_local_path }}"
+    delete_options:
+      gracePeriodSeconds: 0
   delegate_to: localhost
 
 - name: Delete the testpod in dnstest namespace after testing
@@ -166,6 +184,8 @@
     namespace: dnstest
     name: testpod
     kubeconfig: "{{ kubeconfig_local_path }}"
+    delete_options:
+      gracePeriodSeconds: 0
   delegate_to: localhost
 
 - name: Delete the testservice in dnstest namespace after testing
@@ -183,4 +203,17 @@
     kind: Namespace
     name: dnstest
     kubeconfig: "{{ kubeconfig_local_path }}"
+  delegate_to: localhost
+
+- name: Wait until the dnstest namespace is absent
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: dnstest
+    kubeconfig: "{{ kubeconfig_local_path }}"
+  register: dnstest_cleanup
+  retries: 30
+  delay: 2
+  until: dnstest_cleanup.resources | length == 0
+  changed_when: false
   delegate_to: localhost

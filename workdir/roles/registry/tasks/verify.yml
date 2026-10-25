@@ -1,19 +1,24 @@
 ---
-- name: Wait for registry pod to be Running
+- name: Wait for registry Deployment rollout to complete
   kubernetes.core.k8s_info:
-    kind: Pod
+    api_version: apps/v1
+    kind: Deployment
+    name: "{{ registry_name }}"
     namespace: "{{ registry_namespace }}"
-    label_selectors:
-      - "app={{ registry_name }}"
     kubeconfig: "{{ kubeconfig_local_path }}"
-  register: registry_pods
-  retries: 10
-  delay: 6
+  register: registry_deployment
+  retries: 24
+  delay: 5
   until: >
-    registry_pods.resources | length > 0 and
-    registry_pods.resources[0].status.phase == 'Running' and
-    registry_pods.resources[0].status.containerStatuses is defined and
-    (registry_pods.resources[0].status.containerStatuses | selectattr('ready', 'equalto', true) | list | length) == 1
+    registry_deployment.resources | length == 1 and
+    (registry_deployment.resources[0].status.observedGeneration | default(0) | int) >=
+      (registry_deployment.resources[0].metadata.generation | int) and
+    (registry_deployment.resources[0].status.updatedReplicas | default(0) | int) ==
+      (registry_deployment.resources[0].spec.replicas | int) and
+    (registry_deployment.resources[0].status.readyReplicas | default(0) | int) ==
+      (registry_deployment.resources[0].spec.replicas | int) and
+    (registry_deployment.resources[0].status.availableReplicas | default(0) | int) ==
+      (registry_deployment.resources[0].spec.replicas | int)
   delegate_to: localhost
 
 - name: Resolve registry verification port
@@ -167,6 +172,9 @@
         wget -qO- --header="Authorization: Basic $AUTH"
         https://{{ registry_cluster_dns_name }}:{{ registry_verify_port }}/v2/
   register: wget_test
+  retries: 12
+  delay: 5
+  until: wget_test.rc == 0
   changed_when: false
   failed_when: wget_test.rc != 0
   delegate_to: localhost
@@ -188,8 +196,15 @@
         wget -qO- --header="Authorization: Basic $AUTH"
         https://{{ registry_cluster_dns_name }}:{{ registry_verify_port }}/metrics
   register: registry_metrics_test
+  retries: 12
+  delay: 5
+  until:
+    - registry_metrics_test.rc == 0
+    - "'# HELP' in registry_metrics_test.stdout"
   changed_when: false
-  failed_when: "'# HELP' not in registry_metrics_test.stdout"
+  failed_when: >-
+    registry_metrics_test.rc != 0 or
+    '# HELP' not in registry_metrics_test.stdout
   delegate_to: localhost
 
 - name: Show registry test result
