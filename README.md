@@ -222,7 +222,7 @@ The control image's default `kubectl` version mirrors the catalog and may be
 overridden for a staged operation:
 
 ```bash
-KUBECTL_VERSION=v1.37.0 ./cluster-control.sh --build
+KUBECTL_VERSION=v1.37.1 ./cluster-control.sh --build
 ```
 
 Workload images are pinned by multi-architecture digest where the deployment is
@@ -254,7 +254,7 @@ Always create and inspect a plan first:
 
 ```bash
 ./cluster-control.sh --upgrade-plan \
-  --target-version 1.37.0 \
+  --target-version 1.37.1 \
   --target-os-version 26.04
 ```
 
@@ -280,7 +280,7 @@ For separate maintenance windows:
 
 ./cluster-control.sh --upgrade-cluster \
   --kubernetes-only \
-  --target-version 1.37.0 \
+  --target-version 1.37.1 \
   --apply-upgrade
 ```
 
