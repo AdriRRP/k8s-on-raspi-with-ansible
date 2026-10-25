@@ -226,6 +226,20 @@ def throttling_value(node):
         return None
 
 
+def throttling_flags(value):
+    names = {
+        0: "under-voltage active",
+        1: "CPU frequency capped",
+        2: "throttling active",
+        3: "soft temperature limit active",
+        16: "under-voltage occurred",
+        17: "CPU frequency capping occurred",
+        18: "throttling occurred",
+        19: "soft temperature limit occurred",
+    }
+    return [name for bit, name in names.items() if value & (1 << bit)]
+
+
 def node_summary(name, node):
     cpu_count = node.get("cpu", {}).get("logical_cpu_count") or 0
     load_one = node.get("cpu", {}).get("load_average", {}).get("one_minute")
@@ -248,6 +262,7 @@ def node_summary(name, node):
         "swap_total_bytes": memory.get("swap_total_bytes", 0),
         "maximum_temperature_celsius": maximum_temperature(node),
         "throttling_value": throttling_value(node),
+        "raspberry_pi_eeprom": node.get("cpu", {}).get("raspberry_pi_eeprom", {}),
         "cpu_pressure_some_avg10": pressure_avg10(node, "cpu", "some"),
         "memory_pressure_full_avg10": pressure_avg10(node, "memory", "full"),
         "io_pressure_full_avg10": pressure_avg10(node, "io", "full"),
@@ -335,12 +350,21 @@ def evaluate_findings(cluster, nodes):
         elif temperature is not None and temperature >= 70:
             add_finding(findings, "warn", scope, f"Temperature reached {temperature:.1f} C.")
         if node["throttling_value"]:
+            flags = throttling_flags(node["throttling_value"])
+            active = node["throttling_value"] & 0xF
             add_finding(
                 findings,
-                "warn",
+                "fail" if active else "warn",
                 scope,
-                f"Raspberry Pi throttling flags are 0x{node['throttling_value']:x}.",
+                (
+                    f"Raspberry Pi throttling flags are 0x{node['throttling_value']:x} "
+                    f"({', '.join(flags)})."
+                ),
             )
+        eeprom = node["raspberry_pi_eeprom"]
+        eeprom_output = f"{eeprom.get('stdout', '')}\n{eeprom.get('stderr', '')}".lower()
+        if eeprom.get("available") and "update available" in eeprom_output:
+            add_finding(findings, "warn", scope, "Raspberry Pi boot EEPROM update is pending.")
         memory_available = node["memory_available_percent"]
         if memory_available is not None and memory_available < 8:
             add_finding(findings, "fail", scope, f"Available memory is {memory_available:.1f}%.")

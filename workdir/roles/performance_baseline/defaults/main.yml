@@ -5,3 +5,4 @@ performance_baseline_run_id: ""
 performance_baseline_api_samples: 15
 performance_baseline_command_timeout_seconds: 15
 performance_baseline_repository_revision: unknown
+performance_baseline_include_path_sizes: true

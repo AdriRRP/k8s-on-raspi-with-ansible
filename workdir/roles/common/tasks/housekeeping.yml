@@ -9,7 +9,19 @@
   loop:
     - /etc/apt/apt.conf.d
     - /etc/systemd/journald.conf.d
+    - /etc/systemd/logind.conf.d
     - /etc/tmpfiles.d
+  become: true
+
+- name: Prevent unattended-upgrades from shortening kubelet graceful shutdown
+  ansible.builtin.file:
+    src: /dev/null
+    dest: /etc/systemd/logind.conf.d/unattended-upgrades-logind-maxdelay.conf
+    state: link
+    force: true
+    owner: root
+    group: root
+  when: common_enable_kubelet_graceful_shutdown_compatibility | bool
   become: true
 
 - name: Configure APT housekeeping defaults

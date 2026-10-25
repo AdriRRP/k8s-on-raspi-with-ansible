@@ -174,18 +174,32 @@ def apply_pod(kubeconfig, definition, image):
 
 def wait_for_pod(kubeconfig, namespace, name, *, timeout=90):
     deadline = time.monotonic() + timeout
+    last_error = ""
     while time.monotonic() < deadline:
-        pod = kubectl_json(
+        result = kubectl(
             kubeconfig,
             ["get", "pod", name, "-n", namespace, "--output=json"],
+            timeout=10,
+            check=False,
         )
+        if result.returncode != 0:
+            last_error = result.stderr.strip()
+            time.sleep(0.5)
+            continue
+        try:
+            pod = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            last_error = f"invalid API response: {error}"
+            time.sleep(0.5)
+            continue
         conditions = pod.get("status", {}).get("conditions", [])
         if any(item.get("type") == "Ready" and item.get("status") == "True" for item in conditions):
             return pod
         if pod.get("status", {}).get("phase") == "Failed":
             raise RuntimeError(f"Pod {namespace}/{name} failed: {pod['status']}")
         time.sleep(0.25)
-    raise TimeoutError(f"Pod {namespace}/{name} was not Ready within {timeout}s")
+    detail = f" Last API error: {last_error}" if last_error else ""
+    raise TimeoutError(f"Pod {namespace}/{name} was not Ready within {timeout}s.{detail}")
 
 
 def benchmark_pod_startup(kubeconfig, namespace, nodes, image, sample_count):
@@ -256,6 +270,27 @@ def benchmark_dns(kubeconfig, namespace, utility_pods, query_count):
                 "node": node,
                 "queries": query_count,
                 "average_ms": float(exec_shell(kubeconfig, namespace, pod, script, timeout=60)),
+            }
+        )
+    return results
+
+
+def benchmark_cpu(kubeconfig, namespace, utility_pods):
+    results = []
+    for node, pod in utility_pods.items():
+        script = (
+            "start=$(cut -d' ' -f1 /proc/uptime); "
+            'i=0; while [ "$i" -lt 4 ]; do '
+            "dd if=/dev/zero bs=1M count=16 2>/dev/null | sha256sum >/dev/null || exit 1; "
+            "i=$((i + 1)); done; "
+            "end=$(cut -d' ' -f1 /proc/uptime); "
+            'awk -v start="$start" -v end="$end" '
+            "'BEGIN { printf \"%.2f\", (end-start)*1000 }'"
+        )
+        results.append(
+            {
+                "node": node,
+                "milliseconds": float(exec_shell(kubeconfig, namespace, pod, script, timeout=90)),
             }
         )
     return results
@@ -339,6 +374,7 @@ def render_report(result):
     api = result["results"]["api_ready_latency_ms"]
     startup = result["results"]["pod_startup_latency_ms"]
     dns = result["results"]["dns"]
+    cpu = result["results"]["cpu_hash"]
     network = result["results"]["network"]
     lines = [
         "# Active-safe cluster benchmark",
@@ -353,6 +389,10 @@ def render_report(result):
         "| --- | ---: | ---: |",
         f"| Persistent API `/readyz` | {api['median']:.2f} ms | {api['p95']:.2f} ms |",
         f"| Pod startup to Ready | {startup['median']:.2f} ms | {startup['p95']:.2f} ms |",
+        (
+            "| CPU SHA-256 workload | "
+            f"{statistics.median(item['milliseconds'] for item in cpu):.2f} ms | n/a |"
+        ),
         "",
         "| DNS source node | Average query latency |",
         "| --- | ---: |",
@@ -391,6 +431,10 @@ def render_report(result):
                 ),
                 (f"| DNS mean | {comparison['dns_mean_delta_percent']:+.2f}% | lower is better |"),
                 (
+                    "| CPU workload median | "
+                    f"{comparison['cpu_median_delta_percent']:+.2f}% | lower is better |"
+                ),
+                (
                     "| Cross-node network mean | "
                     f"{comparison['network_mean_delta_percent']:+.2f}% "
                     "| higher is better |"
@@ -422,6 +466,9 @@ def metric_means(result):
         "api_median": result["results"]["api_ready_latency_ms"]["median"],
         "pod_startup_median": result["results"]["pod_startup_latency_ms"]["median"],
         "dns_mean": statistics.mean(dns),
+        "cpu_median": statistics.median(
+            item["milliseconds"] for item in result["results"]["cpu_hash"]
+        ),
         "network_mean": statistics.mean(network),
     }
 
@@ -438,7 +485,7 @@ def latest_control(output_root):
             candidate = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if candidate.get("experiment") == "control":
+        if candidate.get("experiment") == "control" and candidate.get("schema_version") == 2:
             return candidate
     return None
 
@@ -460,6 +507,10 @@ def compare_with_control(result, control):
             current_metrics["dns_mean"],
             control_metrics["dns_mean"],
         ),
+        "cpu_median_delta_percent": delta_percent(
+            current_metrics["cpu_median"],
+            control_metrics["cpu_median"],
+        ),
         "network_mean_delta_percent": delta_percent(
             current_metrics["network_mean"],
             control_metrics["network_mean"],
@@ -468,7 +519,7 @@ def compare_with_control(result, control):
 
 
 def execute(args):
-    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = args.run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     namespace = f"cluster-benchmark-{run_id.lower()}"
     nodes = ready_nodes(args.kubeconfig)
     namespace_definition = {
@@ -508,6 +559,7 @@ def execute(args):
             utility_pods,
             args.dns_queries,
         )
+        cpu = benchmark_cpu(args.kubeconfig, namespace, utility_pods)
         network = benchmark_network(
             args.kubeconfig,
             namespace,
@@ -517,7 +569,7 @@ def execute(args):
             args.network_transfer_mib,
         )
         result = {
-            "schema_version": 1,
+            "schema_version": 2,
             "profile": "active-safe",
             "run_id": run_id,
             "captured_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -533,6 +585,7 @@ def execute(args):
                 "api_ready_latency_ms": api,
                 "pod_startup_latency_ms": startup,
                 "dns": dns,
+                "cpu_hash": cpu,
                 "network": network,
             },
         }
@@ -585,6 +638,7 @@ def main():
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--experiment", default="control")
+    parser.add_argument("--run-id", default="")
     parser.add_argument(
         "--api-samples",
         type=bounded_integer(10, 200),
@@ -606,6 +660,14 @@ def main():
         default=8,
     )
     args = parser.parse_args()
+    if args.run_id and not (
+        len(args.run_id) == 16
+        and args.run_id.endswith("Z")
+        and args.run_id[:8].isdigit()
+        and args.run_id[9:15].isdigit()
+        and args.run_id[8] == "T"
+    ):
+        parser.error("--run-id must use UTC format YYYYMMDDTHHMMSSZ")
     execute(args)
 
 

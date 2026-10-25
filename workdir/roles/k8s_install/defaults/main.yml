@@ -40,8 +40,13 @@ kubelet_reserved_profiles:
 
 kubelet_image_gc_high_threshold_percent: 70
 kubelet_image_gc_low_threshold_percent: 60
+kubelet_image_maximum_gc_age: "720h"
 kubelet_node_status_max_images: 20
 kubelet_container_log_max_size: "10Mi"
 kubelet_container_log_max_files: 3
+kubelet_pod_pids_limit: 4096
+kubelet_eviction_pid_available: "1000"
+kubelet_shutdown_grace_period: "60s"
+kubelet_shutdown_grace_period_critical_pods: "20s"
 kubelet_serialize_image_pulls: true
 kubelet_max_parallel_image_pulls: 2

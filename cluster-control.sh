@@ -35,6 +35,11 @@ media_dry_run=false
 upgrade_execution_mode_option=""
 upgrade_scope_option=""
 storage_hygiene_apply=false
+optimizer_selected=false
+optimizer_mode="audit"
+optimizer_experiment=""
+optimizer_baseline_runs="3"
+optimizer_benchmark_runs="3"
 
 usage() {
   cat <<'EOF'
@@ -58,8 +63,15 @@ Platform services:
 Performance:
   --baseline                      Capture a read-only cluster baseline
   --benchmark                     Run bounded, ephemeral active benchmarks
+  --optimize-cluster              Audit performance; apply only with explicit options
   --performance-profile           Apply one reversible tuning profile
   --node-local-dns                Audit or explicitly manage NodeLocal DNS
+
+Optimization options:
+  --apply-optimization            Allow a measured experiment and automatic rollback
+  --optimization-experiment NAME  node-local-dns or schedutil
+  --optimization-baseline-runs N  Repeated health observations (default: 3)
+  --optimization-benchmark-runs N Repeated active-safe measurements (default: 3)
 
 Maintenance:
   --status | --shutdown
@@ -426,6 +438,11 @@ while [[ "$#" -gt 0 ]]; do
       mark_operation
       docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/27-run-performance-benchmark.yml"
       ;;
+    --optimize-cluster)
+      mark_operation
+      optimizer_selected=true
+      docker_cmd="python3 tools/cluster_optimizer.py"
+      ;;
     --performance-profile)
       mark_operation
       docker_cmd="ansible-playbook -i inventory/hosts.ini playbooks/28-apply-performance-profile.yml"
@@ -448,6 +465,24 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --apply-storage-cleanup)
       storage_hygiene_apply=true
+      ;;
+    --apply-optimization)
+      optimizer_mode="apply"
+      ;;
+    --optimization-experiment)
+      require_option_value "$1" "${2-}"
+      optimizer_experiment="$2"
+      shift
+      ;;
+    --optimization-baseline-runs)
+      require_option_value "$1" "${2-}"
+      optimizer_baseline_runs="$2"
+      shift
+      ;;
+    --optimization-benchmark-runs)
+      require_option_value "$1" "${2-}"
+      optimizer_benchmark_runs="$2"
+      shift
       ;;
     --discover-cluster)
       mark_operation
@@ -674,13 +709,34 @@ if (( operation_count > 1 )); then
   exit 2
 fi
 
+if $optimizer_selected; then
+  if [[ "${optimizer_mode}" == "apply" && -z "${optimizer_experiment}" ]]; then
+    error "--apply-optimization requires --optimization-experiment."
+    exit 2
+  fi
+  if [[ "${optimizer_mode}" == "audit" && -n "${optimizer_experiment}" ]]; then
+    error "--optimization-experiment requires --apply-optimization."
+    exit 2
+  fi
+  docker_cmd+=" --mode $(printf '%q' "${optimizer_mode}")"
+  docker_cmd+=" --baseline-runs $(printf '%q' "${optimizer_baseline_runs}")"
+  docker_cmd+=" --benchmark-runs $(printf '%q' "${optimizer_benchmark_runs}")"
+  if [[ -n "${optimizer_experiment}" ]]; then
+    docker_cmd+=" --experiment $(printf '%q' "${optimizer_experiment}")"
+  fi
+fi
+
 if (( operation_count == 0 )) && {
   [[ "${#docker_env_args[@]}" -gt 0 ]] ||
     [[ "${#playbook_extra_args[@]}" -gt 0 ]] ||
     [[ -n "${media_node}${media_device}${media_bundle_id}${media_image_url}${media_sha256sums_url}" ]] ||
     $media_refresh ||
     $media_dry_run ||
-    $storage_hygiene_apply
+    $storage_hygiene_apply ||
+    [[ "${optimizer_mode}" != "audit" ]] ||
+    [[ -n "${optimizer_experiment}" ]] ||
+    [[ "${optimizer_baseline_runs}" != "3" ]] ||
+    [[ "${optimizer_benchmark_runs}" != "3" ]]
 }; then
   error "Options were provided without an operation."
   exit 2

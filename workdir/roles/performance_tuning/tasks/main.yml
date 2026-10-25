@@ -26,6 +26,7 @@
     mode: '0755'
   when: performance_tuning_profile in ['control', 'schedutil']
   become: true
+  register: performance_tuning_governor_helper
 
 - name: Install persistent CPU governor service
   ansible.builtin.template:
@@ -36,13 +37,33 @@
     mode: '0644'
   when: performance_tuning_profile in ['control', 'schedutil']
   become: true
+  register: performance_tuning_governor_service
+
+- name: Detect CPU governor drift
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/raspi-set-cpu-governor
+      - --check
+      - "{{ performance_tuning_cpu_governor }}"
+  when: performance_tuning_profile in ['control', 'schedutil']
+  changed_when: false
+  failed_when: false
+  become: true
+  register: performance_tuning_governor_check
 
 - name: Apply selected CPU governor
   ansible.builtin.systemd_service:
     name: raspi-cpu-governor.service
     daemon_reload: true
     enabled: true
-    state: restarted
+    state: >-
+      {{
+        'restarted'
+        if performance_tuning_governor_helper is changed
+        or performance_tuning_governor_service is changed
+        or performance_tuning_governor_check.rc != 0
+        else 'started'
+      }}
   when: performance_tuning_profile in ['control', 'schedutil']
   become: true
 

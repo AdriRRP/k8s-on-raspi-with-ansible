@@ -328,11 +328,43 @@ Run the complementary active-safe control benchmark explicitly:
 ./cluster-control.sh --benchmark
 ```
 
-It measures persistent API latency, Pod startup, DNS and Pod-to-Pod throughput
+It measures persistent API latency, Pod startup, DNS, bounded CPU hashing and
+Pod-to-Pod throughput
 inside a temporary restricted namespace. Sample counts, CPU/memory and network
 traffic are bounded, no storage load is generated, and cleanup runs even after
 an error. Results are written below
 `config/.kube/outputs/benchmarks-active/YYYYMMDDTHHMMSSZ/`.
+
+Run the evidence-based optimization audit after an upgrade or hardware change:
+
+```bash
+./cluster-control.sh --optimize-cluster
+```
+
+The audit requires clean package, service, firmware, thermal, power and I/O
+signals; captures three read-only baselines; and runs three bounded benchmark
+samples without retaining a tuning change. Results are written below
+`config/.kube/outputs/optimizations/YYYYMMDDTHHMMSSZ/`.
+
+Apply exactly one measured experiment only after reviewing the audit:
+
+```bash
+./cluster-control.sh --optimize-cluster \
+  --apply-optimization \
+  --optimization-experiment node-local-dns
+
+./cluster-control.sh --optimize-cluster \
+  --apply-optimization \
+  --optimization-experiment schedutil
+```
+
+Apply mode establishes a clean control, takes three control and three experiment
+measurements, rejects regressions above 10%, requires at least 5% improvement in
+the experiment's primary signal, and checks post-test temperature and health.
+It promotes the experiment only when every gate passes. Any rejection or error
+restores the previous NodeLocal DNS state or CPU governor automatically. Sample
+counts can be changed within the safe range of 2-5 with
+`--optimization-baseline-runs` and `--optimization-benchmark-runs`.
 
 Name an A/B experiment without changing the safety limits:
 
@@ -392,6 +424,8 @@ The default node policy favors stability and flash lifetime:
 - stale persisted Kubernetes/Calico rule snapshots are detected and disabled
 - known duplicate cloud-init logrotate transitions are repaired only on checksum match
 - kubelet system reservations, image garbage collection and log rotation
+- bounded Pod PIDs, PID/inode eviction and 30-day unused-image garbage collection
+- graceful kubelet shutdown with the Ubuntu unattended-upgrades conflict neutralized
 - serial package and node upgrades
 - optional admin utilities disabled unless `common_install_admin_tools` is enabled
 

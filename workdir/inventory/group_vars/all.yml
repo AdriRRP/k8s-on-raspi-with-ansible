@@ -197,6 +197,7 @@ performance_baseline_repository_revision: unknown
 # entrypoint. Limits are deliberately small for four Raspberry Pi nodes.
 performance_benchmark_profile: active-safe
 performance_benchmark_experiment: control
+performance_benchmark_run_id: ""
 performance_benchmark_output_root: "{{ kubernetes_outputs }}/benchmarks-active"
 performance_benchmark_api_samples: 50
 performance_benchmark_pod_startup_samples: 8
