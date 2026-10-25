@@ -37,6 +37,8 @@
           - "{{ platform_smoke_test_image }}"
           - --experiment
           - "{{ performance_benchmark_experiment }}"
+          - --run-id
+          - "{{ performance_benchmark_run_id }}"
           - --api-samples
           - "{{ performance_benchmark_api_samples | string }}"
           - --pod-startup-samples

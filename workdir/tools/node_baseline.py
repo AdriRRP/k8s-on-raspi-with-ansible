@@ -290,8 +290,13 @@ def software_versions(timeout):
     return versions
 
 
-def collect(timeout):
+def collect(timeout, include_path_sizes=True):
     memory = parse_meminfo()
+    pressure = {
+        "cpu": parse_pressure("/proc/pressure/cpu"),
+        "memory": parse_pressure("/proc/pressure/memory"),
+        "io": parse_pressure("/proc/pressure/io"),
+    }
     filesystems, filesystem_command = parse_filesystems(timeout)
     service_status, failed_units = service_states(timeout)
     load_average = os.getloadavg()
@@ -305,6 +310,16 @@ def collect(timeout):
             "returncode": None,
             "stdout": "",
             "stderr": "vcgencmd not installed",
+        }
+    )
+    eeprom = (
+        run(["rpi-eeprom-update"], timeout)
+        if shutil.which("rpi-eeprom-update")
+        else {
+            "available": False,
+            "returncode": None,
+            "stdout": "",
+            "stderr": "rpi-eeprom-update not installed",
         }
     )
     processes = run(
@@ -346,6 +361,7 @@ def collect(timeout):
             "frequency_policies": parse_cpu_frequencies(),
             "temperatures": parse_temperatures(),
             "raspberry_pi_throttling": throttling,
+            "raspberry_pi_eeprom": eeprom,
         },
         "memory": {
             "total_bytes": memory.get("MemTotal", 0),
@@ -357,11 +373,7 @@ def collect(timeout):
             "swap_total_bytes": memory.get("SwapTotal", 0),
             "swap_free_bytes": memory.get("SwapFree", 0),
         },
-        "pressure": {
-            "cpu": parse_pressure("/proc/pressure/cpu"),
-            "memory": parse_pressure("/proc/pressure/memory"),
-            "io": parse_pressure("/proc/pressure/io"),
-        },
+        "pressure": pressure,
         "storage": {
             "filesystems": filesystems,
             "filesystems_command": filesystem_command,
@@ -371,7 +383,7 @@ def collect(timeout):
                 else {"error": block_devices["stderr"] or "lsblk failed"}
             ),
             "diskstats": parse_diskstats(),
-            "path_sizes": path_sizes(timeout),
+            "path_sizes": path_sizes(timeout) if include_path_sizes else {},
         },
         "network": {
             "counters": parse_network_counters(),
@@ -390,10 +402,11 @@ def collect(timeout):
 def main():
     parser = argparse.ArgumentParser(description="Capture a read-only Linux node baseline.")
     parser.add_argument("--timeout", type=int, default=15)
+    parser.add_argument("--skip-path-sizes", action="store_true")
     args = parser.parse_args()
     if args.timeout < 1 or args.timeout > 120:
         parser.error("--timeout must be between 1 and 120 seconds")
-    print(json.dumps(collect(args.timeout), sort_keys=True))
+    print(json.dumps(collect(args.timeout, not args.skip_path_sizes), sort_keys=True))
 
 
 if __name__ == "__main__":

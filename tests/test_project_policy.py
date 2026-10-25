@@ -101,6 +101,8 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn("--validate", wrapper)
         self.assertIn("--baseline", wrapper)
         self.assertIn("--benchmark", wrapper)
+        self.assertIn("--optimize-cluster", wrapper)
+        self.assertIn("--apply-optimization", wrapper)
         self.assertIn("--performance-profile", wrapper)
         self.assertIn("--node-local-dns", wrapper)
         self.assertIn("--reconcile-node-hygiene", wrapper)
@@ -118,6 +120,7 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn("performance_baseline_profile: observe", group_vars)
         self.assertIn("{{ kubernetes_outputs }}/benchmarks", group_vars)
         self.assertIn("performance_baseline_profile == 'observe'", playbook)
+        self.assertIn("performance_baseline_include_path_sizes", playbook)
         self.assertNotIn("kubernetes.core.k8s:", playbook)
 
     def test_active_benchmark_is_explicit_bounded_and_always_cleans_up(self):
@@ -148,6 +151,44 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertIn("'control'", role)
         self.assertIn("performance_tuning_profile == 'control'", role)
         self.assertIn("--check", role)
+
+    def test_optimizer_is_repeated_gated_and_rolls_back(self):
+        optimizer = (REPO_ROOT / "workdir" / "tools" / "cluster_optimizer.py").read_text()
+        benchmark = (REPO_ROOT / "workdir" / "tools" / "cluster_benchmark.py").read_text()
+
+        self.assertIn('choices=("node-local-dns", "schedutil")', optimizer)
+        self.assertIn("baseline_blockers(before)", optimizer)
+        self.assertIn('"performance_baseline_include_path_sizes": False', optimizer)
+        self.assertIn("json.dumps(extra_vars", optimizer)
+        self.assertIn("for _ in range(args.benchmark_runs)", optimizer)
+        self.assertIn("finally:", optimizer)
+        self.assertIn("if mutation_started and not promoted", optimizer)
+        self.assertIn('parser.add_argument("--run-id"', benchmark)
+        self.assertIn('"cpu_hash"', benchmark)
+
+    def test_kubelet_has_pi_resource_and_shutdown_safeguards(self):
+        defaults = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_install" / "defaults" / "main.yml"
+        ).read_text()
+        config = (
+            REPO_ROOT
+            / "workdir"
+            / "roles"
+            / "k8s_install"
+            / "templates"
+            / "kubelet-optimization.conf.j2"
+        ).read_text()
+        housekeeping = (
+            REPO_ROOT / "workdir" / "roles" / "common" / "tasks" / "housekeeping.yml"
+        ).read_text()
+
+        self.assertIn('kubelet_image_maximum_gc_age: "720h"', defaults)
+        self.assertIn("podPidsLimit:", config)
+        self.assertIn("pid.available:", config)
+        self.assertIn("imagefs.inodesFree:", config)
+        self.assertIn("shutdownGracePeriod:", config)
+        self.assertIn("shutdownGracePeriodCriticalPods:", config)
+        self.assertIn("unattended-upgrades-logind-maxdelay.conf", housekeeping)
 
     def test_node_local_dns_defaults_to_audit_and_pins_multiarch_image(self):
         group_vars = (REPO_ROOT / "workdir" / "inventory" / "group_vars" / "all.yml").read_text()

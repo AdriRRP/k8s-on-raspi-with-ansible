@@ -62,6 +62,17 @@ class BaselineMathTests(unittest.TestCase):
     def test_format_bytes_uses_binary_units(self):
         self.assertEqual(cluster_baseline.format_bytes(1024**3), "1.0 GiB")
 
+    def test_throttling_flags_distinguish_current_and_historical_events(self):
+        self.assertEqual(
+            cluster_baseline.throttling_flags(0x50005),
+            [
+                "under-voltage active",
+                "throttling active",
+                "under-voltage occurred",
+                "throttling occurred",
+            ],
+        )
+
 
 class NodeParsingTests(unittest.TestCase):
     def test_parse_pressure(self):
@@ -72,6 +83,12 @@ class NodeParsingTests(unittest.TestCase):
 
         self.assertEqual(pressure["some"]["avg10"], 1.25)
         self.assertEqual(pressure["some"]["total"], 42)
+
+    def test_lightweight_capture_skips_recursive_path_sizes(self):
+        self.assertIn(
+            "--skip-path-sizes",
+            (REPO_ROOT / "workdir" / "tools" / "node_baseline.py").read_text(),
+        )
 
 
 class BaselineReportTests(unittest.TestCase):

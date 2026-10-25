@@ -21,6 +21,7 @@ common_var_tmp_cleanup_age: "30d"
 
 common_enable_fstrim_timer: true
 common_repair_cloud_init_logrotate_transition: true
+common_enable_kubelet_graceful_shutdown_compatibility: true
 
 common_required_packages:
   - ca-certificates

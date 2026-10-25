@@ -4,6 +4,7 @@
     cmd: >-
       {{ playbook_dir }}/../tools/node_baseline.py
       --timeout {{ performance_baseline_command_timeout_seconds }}
+      {{ '' if performance_baseline_include_path_sizes | bool else '--skip-path-sizes' }}
     executable: python3
   register: performance_baseline_node_capture
   become: true

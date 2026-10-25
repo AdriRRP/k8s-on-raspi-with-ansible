@@ -12,9 +12,11 @@
           - performance_baseline_api_samples | int <= 100
           - performance_baseline_command_timeout_seconds | int >= 1
           - performance_baseline_command_timeout_seconds | int <= 120
+          - performance_baseline_include_path_sizes is boolean
         fail_msg: >-
           Only the non-mutating observe profile is currently supported. API samples
-          must be 3-100 and command timeout must be 1-120 seconds.
+          must be 3-100, command timeout must be 1-120 seconds, and path-size
+          collection must be a boolean.
 
     - name: Resolve baseline run identifier
       ansible.builtin.set_fact:

@@ -13,14 +13,20 @@ enforceNodeAllocatable:
   - pods
 imageGCHighThresholdPercent: {{ kubelet_image_gc_high_threshold_percent }}
 imageGCLowThresholdPercent: {{ kubelet_image_gc_low_threshold_percent }}
+imageMaximumGCAge: {{ kubelet_image_maximum_gc_age }}
 nodeStatusMaxImages: {{ kubelet_node_status_max_images }}
 containerLogMaxSize: {{ kubelet_container_log_max_size }}
 containerLogMaxFiles: {{ kubelet_container_log_max_files }}
+podPidsLimit: {{ kubelet_pod_pids_limit }}
+shutdownGracePeriod: {{ kubelet_shutdown_grace_period }}
+shutdownGracePeriodCriticalPods: {{ kubelet_shutdown_grace_period_critical_pods }}
 evictionHard:
   memory.available: {{ kubelet_eviction_memory_available }}
   nodefs.available: "10%"
   nodefs.inodesFree: "5%"
   imagefs.available: "15%"
+  imagefs.inodesFree: "5%"
+  pid.available: "{{ kubelet_eviction_pid_available }}"
 serializeImagePulls: {{ 'true' if kubelet_serialize_image_pulls | bool else 'false' }}
 {% if not (kubelet_serialize_image_pulls | bool) %}
 maxParallelImagePulls: {{ kubelet_max_parallel_image_pulls }}
