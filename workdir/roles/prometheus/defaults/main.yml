@@ -7,6 +7,8 @@ prometheus_service_type: ClusterIP
 prometheus_pvc_size: 10Gi
 prometheus_retention_time: 7d
 prometheus_runtime_node_name: ""
+prometheus_rollout_retries: 36
+prometheus_rollout_delay: 10
 registry_namespace: registry
 registry_name: registry
 registry_tls_enabled: true

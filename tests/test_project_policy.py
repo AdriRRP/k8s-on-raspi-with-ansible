@@ -412,6 +412,15 @@ class ProjectPolicyTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("grafana_rollout_retries: 72", grafana_defaults)
+        prometheus_defaults = (
+            REPO_ROOT / "workdir" / "roles" / "prometheus" / "defaults" / "main.yml"
+        ).read_text()
+        self.assertIn("prometheus_rollout_retries: 36", prometheus_defaults)
+        coredns_tasks = (
+            REPO_ROOT / "workdir" / "roles" / "k8s_verify" / "tasks" / "coredns.yml"
+        ).read_text()
+        self.assertIn("Wait until the dnsutils pod is absent", coredns_tasks)
+        self.assertIn("Wait until the dnstest namespace is absent", coredns_tasks)
         self.assertIn("grafana_startup_probe_failure_threshold: 60", grafana_defaults)
         self.assertIn("upgrade_registry_existing_namespace", addon_tasks)
         self.assertIn('namespace: "{{ item }}"', addon_tasks)
@@ -461,6 +470,9 @@ class ProjectPolicyTests(unittest.TestCase):
         self.assertNotIn('"ui"', config)
         verify_tasks = (registry_root / "tasks" / "verify.yml").read_text()
         self.assertIn("failed_when: wget_test.rc != 0", verify_tasks)
+        self.assertIn("Wait for registry Deployment rollout to complete", verify_tasks)
+        self.assertIn("registry_deployment.resources[0].status.observedGeneration", verify_tasks)
+        self.assertIn("until: wget_test.rc == 0", verify_tasks)
         self.assertNotIn("--no-check-certificate", verify_tasks)
         self.assertIn("Wait until previous registry test pod is absent", verify_tasks)
         prometheus_tasks = (

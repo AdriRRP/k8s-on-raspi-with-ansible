@@ -74,8 +74,8 @@
     name: prometheus
     kubeconfig: "{{ kubeconfig_local_path }}"
   register: prometheus_deployment
-  retries: 10
-  delay: 10
+  retries: "{{ prometheus_rollout_retries }}"
+  delay: "{{ prometheus_rollout_delay }}"
   until:
     - prometheus_deployment.resources | length > 0
     - >-
