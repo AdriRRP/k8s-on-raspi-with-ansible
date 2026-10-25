@@ -81,6 +81,19 @@ class ProjectPolicyTests(unittest.TestCase):
                         f"{package_name} dependency is not pinned: {requirement}",
                     )
 
+    def test_vulnerability_exception_is_scoped_to_upstream_kubectl_binary(self):
+        dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        grype_config = (REPO_ROOT / ".grype.yaml").read_text()
+
+        self.assertIn("rm -f /usr/bin/pebble", dockerfile)
+        self.assertIn("config: .grype.yaml", workflow)
+        self.assertEqual(grype_config.count("vulnerability: GO-2026-6612"), 2)
+        self.assertEqual(grype_config.count("location: /usr/local/bin/kubectl"), 2)
+        self.assertIn("version: go1.26.8", grype_config)
+        self.assertIn("version: v0.57.0", grype_config)
+        self.assertNotIn("location: /usr/bin/pebble", grype_config)
+
     def test_shell_wrapper_is_location_independent_and_parallel_safe(self):
         wrapper = (REPO_ROOT / "cluster-control.sh").read_text()
 

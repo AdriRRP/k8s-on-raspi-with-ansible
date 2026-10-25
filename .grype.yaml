@@ -1,0 +1,21 @@
+---
+ignore:
+  # Kubernetes v1.37.1 is the latest stable release, but its official kubectl
+  # binary predates the Go HTTP/2 fix. kubectl is used only as an API client in
+  # this image, so the vulnerable HTTP/2 server path is not executable here.
+  # Remove these exact-match exceptions on the next Kubernetes patch release;
+  # review no later than 2026-11-25.
+  - vulnerability: GO-2026-6612
+    package:
+      name: stdlib
+      version: go1.26.8
+      type: go-module
+      location: /usr/local/bin/kubectl
+    reason: Official kubectl is client-only in this image; HTTP/2 server code is not executed.
+  - vulnerability: GO-2026-6612
+    package:
+      name: golang.org/x/net
+      version: v0.57.0
+      type: go-module
+      location: /usr/local/bin/kubectl
+    reason: Official kubectl is client-only in this image; HTTP/2 server code is not executed.
