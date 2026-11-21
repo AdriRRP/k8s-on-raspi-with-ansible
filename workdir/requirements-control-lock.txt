@@ -52,7 +52,7 @@ subprocess-tee==0.4.2
 typing_extensions==4.16.0
 typing-inspection==0.4.4
 urllib3==2.8.0
-wcmatch==11.1
+wcmatch==11.2
 websocket-client==1.9.2
 yamllint==1.38.0
 yarl==1.25.1
